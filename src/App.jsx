@@ -776,11 +776,25 @@ function GuidesTab({ guides, reloadGuides, flash }){
         <h3>등록된 대학 ({names.length})</h3>
         {names.length===0 && <div className="empty">아직 등록된 모집요강이 없습니다.</div>}
         {names.map(u=>(
-          <div key={u} style={{borderBottom:'1px solid var(--line)',padding:'8px 0'}}>
-            <div style={{fontWeight:700}}>{u}</div>
-            <div className="muted" style={{fontSize:12}}>
-              {(guides[u].tracks||[]).map(t=> `${t.trackName}${t.subjectGroups?.length?` (${t.subjectGroups.join('·')})`:''}`).join(' / ') || '전형 정보 없음'}
+          <div key={u} style={{borderBottom:'1px solid var(--line)',padding:'8px 0',display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:8}}>
+            <div className="grow">
+              <div style={{fontWeight:700}}>{u}</div>
+              <div style={{fontSize:12,marginTop:4}}>
+                {(guides[u].tracks||[]).map((t,i)=>(
+                  <div key={i} style={{padding:'3px 0',borderTop:i?'1px dashed var(--line)':undefined}}>
+                    <b>{t.trackName}</b> <span className="muted">[{t.trackType}]</span>
+                    {t.subjectGroups?.length ? ` · 반영: ${t.subjectGroups.join('·')}` : ' · 반영과목 없음(전체평균)'}
+                    {t.topN ? ` · 상위${t.topN}` : ''}
+                    {t.jinroHandling ? ` · 진로: ${t.jinroHandling}` : ''}
+                  </div>
+                ))}
+                {!(guides[u].tracks||[]).length && <span className="muted">전형 정보 없음</span>}
+              </div>
             </div>
+            <button className="btn sm ghost danger" onClick={async()=>{
+              if(!confirm(`"${u}" 모집요강을 삭제할까요?`)) return
+              await db.deleteGuide(u); await reloadGuides(); flash(`${u} 삭제됨`)
+            }}>삭제</button>
           </div>
         ))}
       </div>
