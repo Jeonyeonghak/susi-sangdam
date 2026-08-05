@@ -106,8 +106,10 @@ tr:hover td{background:#fafbfc}
   .report .rp-header{border-bottom:2px solid #111;padding-bottom:8px;margin-bottom:14px}
   .report table{font-size:11px}
   .report th,.report td{border:1px solid #999;white-space:normal}
+  .rp-judge{border:none !important;background:transparent !important;-webkit-appearance:none;appearance:none;padding:0 !important;font-size:11px}
   @page{size:A4 landscape;margin:12mm}
 }
+.rp-judge{border:1px solid var(--line);border-radius:6px;padding:2px 4px;background:#fff;font-size:12px}
 .report{max-width:1040px;margin:0 auto;background:#fff;padding:24px;border-radius:12px}
 .report .rp-header{display:flex;justify-content:space-between;align-items:flex-end}
 .report h1{font-size:20px;margin:0}
