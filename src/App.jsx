@@ -124,8 +124,9 @@ function StudentsTab({ students, teacherId, selStudent, setSelStudent, refresh, 
 
   const save = async ()=>{
     if(!form.name.trim()){ flash('이름을 입력하세요'); return }
+    if(!teacherId){ flash('먼저 위쪽에서 담임을 선택하세요'); return }
     const rec = {
-      teacher_id: teacherId || null, name: form.name.trim(), school: form.school || null,
+      teacher_id: teacherId, name: form.name.trim(), school: form.school || null,
       grade: form.grade || null, track: form.track || null,
       gpa: num(form.gpa), gpa_main: num(form.gpa_main),
       mock: form.mock || null, target: form.target || null, memo: form.memo || null,
@@ -180,13 +181,13 @@ function StudentsTab({ students, teacherId, selStudent, setSelStudent, refresh, 
 
       <div className="pane pane-right">
         {selStudent ? (
-          <div className="card" style={{maxWidth:640}}>
-            <div className="row" style={{justifyContent:'space-between',alignItems:'center'}}>
-              <h3 style={{margin:0}}>{selStudent.name} · 상세</h3>
-              <button className="btn primary" onClick={goSearch}>관심학과 담으러 가기 →</button>
+          <div style={{maxWidth:720}}>
+            <PickedSummary student={selStudent} goSearch={goSearch} />
+            <div className="card">
+              <h3 style={{margin:'0 0 4px'}}>{selStudent.name} · 정보 수정</h3>
+              <StudentDetail student={selStudent} onSaved={async()=>{await refresh()}} flash={flash}
+                setSelStudent={setSelStudent} />
             </div>
-            <StudentDetail student={selStudent} onSaved={async()=>{await refresh()}} flash={flash}
-              setSelStudent={setSelStudent} />
           </div>
         ) : (
           <div className="card" style={{maxWidth:640}}>
@@ -222,6 +223,61 @@ function StudentsTab({ students, teacherId, selStudent, setSelStudent, refresh, 
         )}
       </div>
     </>
+  )
+}
+
+function PickedSummary({ student, goSearch }){
+  const [picks, setPicks] = useState([])
+  useEffect(()=>{ db.listPicks(student.id).then(setPicks) }, [student.id])
+  const order = { 안정:0, 적정:1, 도전:2, 상향:3 }
+  const sorted = [...picks].filter(p=>p.status!=='제외').sort((a,b)=>(order[a.judgment]??9)-(order[b.judgment]??9))
+  const confirmed = picks.filter(p=>p.status==='지원확정').length
+
+  return (
+    <div className="card">
+      <div className="row" style={{justifyContent:'space-between',alignItems:'center'}}>
+        <h3 style={{margin:0}}>{student.name} · 상담 현황</h3>
+        <button className="btn primary" onClick={goSearch}>관심학과 담으러 가기 →</button>
+      </div>
+      <div className="muted" style={{fontSize:13,marginTop:6}}>
+        {[student.school, student.grade, student.track && `${student.track}계열`].filter(Boolean).join(' · ')}
+        {student.gpa!=null && ` · 내신 ${student.gpa}`}
+        {student.target && ` · 희망: ${student.target}`}
+      </div>
+
+      {student.memo && (
+        <div style={{marginTop:12}}>
+          <div style={{fontSize:12,fontWeight:700,color:'var(--sub)',marginBottom:4}}>상담 메모</div>
+          <div style={{fontSize:13,whiteSpace:'pre-wrap',background:'#fafbfc',border:'1px solid var(--line)',borderRadius:8,padding:'8px 10px'}}>{student.memo}</div>
+        </div>
+      )}
+
+      <div style={{marginTop:14}}>
+        <div style={{fontSize:12,fontWeight:700,color:'var(--sub)',marginBottom:6}}>
+          담은 관심학과 {sorted.length>0 && `(${sorted.length}개 · 지원확정 ${confirmed})`}
+        </div>
+        {sorted.length===0 ? (
+          <div className="muted" style={{fontSize:13}}>아직 담은 학과가 없습니다. 위 버튼으로 담아 보세요.</div>
+        ) : (
+          <table style={{fontSize:13}}>
+            <thead><tr><th>판정</th><th>상태</th><th>대학</th><th>모집단위</th><th>전형</th><th className="num">26컷</th><th>슬롯</th></tr></thead>
+            <tbody>
+              {sorted.map(p=>(
+                <tr key={p.id}>
+                  <td><span className={`j-badge j-${p.judgment}`}>{p.judgment}</span></td>
+                  <td>{p.status}</td>
+                  <td><b>{p.univ}</b></td>
+                  <td>{p.dept}</td>
+                  <td>{p.name}</td>
+                  <td className="num">{fmt(p.cut26)}</td>
+                  <td>{fmt(p.slot)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
   )
 }
 
@@ -283,14 +339,20 @@ function SearchTab({ student, flash }){
   useEffect(()=>{ db.distinctRegions().then(setRegions); db.distinctTypes().then(setTypes) }, [])
   useEffect(()=>{ db.listPicks(student.id).then(setPicks) }, [student.id])
 
-  const run = async ()=>{
+  const hasFilter = Boolean(q.univ.trim() || q.dept.trim() || q.region || q.type)
+
+  useEffect(()=>{
+    if(!hasFilter){ setRows([]); return }
     setLoading(true)
-    const res = await db.searchAdmissions({
-      univ:q.univ.trim(), dept:q.dept.trim(), region:q.region, type:q.type, track:q.track,
-      gpaMax: onlyReachable ? (student.gpa ?? undefined) : undefined,
-    })
-    setRows(res); setLoading(false)
-  }
+    const t = setTimeout(async ()=>{
+      const res = await db.searchAdmissions({
+        univ:q.univ.trim(), dept:q.dept.trim(), region:q.region, type:q.type, track:q.track,
+        gpaMax: onlyReachable ? (student.gpa ?? undefined) : undefined,
+      })
+      setRows(res); setLoading(false)
+    }, 400)
+    return ()=> clearTimeout(t)
+  }, [q.univ, q.dept, q.region, q.type, q.track, onlyReachable, hasFilter, student.gpa])
 
   const pickedIds = useMemo(()=> new Set(picks.map(p=>p.admission_id)), [picks])
   const add = async (adm)=>{
@@ -306,13 +368,14 @@ function SearchTab({ student, flash }){
       <div className="pane pane-right" style={{borderRight:'1px solid var(--line)'}}>
         <div className="card">
           <div className="row" style={{justifyContent:'space-between',alignItems:'center'}}>
-            <h3 style={{margin:0}}>입결 검색 · <span className="muted">{student.name} (내신 {fmt(student.gpa)} / {fmt(student.track)})</span></h3>
+            <h3 style={{margin:0}}>입결 필터 · <span className="muted">{student.name} (내신 {fmt(student.gpa)} / {fmt(student.track)})</span></h3>
+            {loading && <span className="muted" style={{fontSize:12}}>불러오는 중…</span>}
           </div>
           <div className="filters" style={{marginTop:12}}>
             <input className="inp" placeholder="대학명" value={q.univ}
-              onChange={e=>setQ({...q,univ:e.target.value})} onKeyDown={e=>e.key==='Enter'&&run()} />
+              onChange={e=>setQ({...q,univ:e.target.value})} />
             <input className="inp" placeholder="학과/모집단위" value={q.dept}
-              onChange={e=>setQ({...q,dept:e.target.value})} onKeyDown={e=>e.key==='Enter'&&run()} />
+              onChange={e=>setQ({...q,dept:e.target.value})} />
             <select className="inp" value={q.region} onChange={e=>setQ({...q,region:e.target.value})}>
               <option value="">지역 전체</option>
               {regions.map(r=> <option key={r} value={r}>{r}</option>)}
@@ -329,7 +392,7 @@ function SearchTab({ student, flash }){
               <input type="checkbox" checked={onlyReachable} onChange={e=>setOnlyReachable(e.target.checked)} />
               내신 이내만
             </label>
-            <button className="btn primary" onClick={run}>{loading?'검색 중…':'검색'}</button>
+            {hasFilter && <button className="btn ghost sm" onClick={()=>setQ({univ:'',dept:'',region:'',type:'',track:student.track||''})}>필터 초기화</button>}
           </div>
 
           <div className="tablewrap">
@@ -340,8 +403,11 @@ function SearchTab({ student, flash }){
                 <th className="num">26경쟁</th><th>판정</th><th>최저</th><th>고사일</th><th>유의</th>
               </tr></thead>
               <tbody>
-                {rows.length===0 && !loading && (
-                  <tr><td colSpan={14} className="empty">검색 조건을 넣고 [검색]을 누르세요. 대학명 또는 학과 일부만 입력해도 됩니다.</td></tr>
+                {!hasFilter && (
+                  <tr><td colSpan={14} className="empty">위에서 대학명·학과·지역·전형유형 중 하나라도 입력/선택하면 해당하는 입결이 여기 바로 나옵니다. 어떤 대학이 있는지 모르면 지역이나 전형유형부터 골라 보세요.</td></tr>
+                )}
+                {hasFilter && rows.length===0 && !loading && (
+                  <tr><td colSpan={14} className="empty">조건에 맞는 입결이 없습니다. 필터를 넓혀 보세요.</td></tr>
                 )}
                 {rows.map(a=>{
                   const j = suggestJudgment(student.gpa, a.cut26)
