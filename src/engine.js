@@ -251,30 +251,141 @@ Return ONLY this JSON shape:
 }
 
 // ============================================================
-// AI: 생기부 PDF → 성적 배열 추출
+// 생기부 파싱 헬퍼 (원본 그대로 이식)
+// ============================================================
+function splitPagesFromText(text){ return (text||'').split(/(?=\[\d+페이지\])/).filter(p=>p.trim()) }
+function parseExtractedPages(text){
+  return String(text||'').split(/(?=\[\d+페이지\])/).map(s=>s.trim()).filter(Boolean).map((chunk,idx)=>{
+    const m=chunk.match(/^\[(\d+)페이지\]\s*/)
+    return { pageNo:m?Number(m[1]):idx+1, text:chunk }
+  })
+}
+function detectExplicitYears(text){
+  const years=new Set()
+  for(const page of splitPagesFromText(text)){
+    const headerHits=[...page.matchAll(/(?:^|\n)\s*\[?\s*([123])\s*학년\s*\]?\s*(?:\n|$)/g)].map(m=>Number(m[1]))
+    if(headerHits.length){ headerHits.forEach(y=>years.add(y)); continue }
+    const dense=[...page.matchAll(/교과\s+과목[\s\S]{0,120}?([123])\s*학년/g)].map(m=>Number(m[1]))
+    dense.forEach(y=>years.add(y))
+  }
+  return Array.from(years).sort((a,b)=>a-b)
+}
+function getConfirmedYears(text){
+  return detectExplicitYears(text).filter(y=>{
+    const re=new RegExp(`(?:^|\\n|\\t|\\[)${y}\\s*학년(?:\\]|\\n|\\t|\\s)`,'g')
+    return re.test(text||'')
+  })
+}
+function groupPagesByYear(text){
+  const pages=parseExtractedPages(text)
+  const groups={1:[],2:[],3:[]}
+  let cur=null
+  for(const page of pages){
+    const hits=[...page.text.matchAll(/(?:^|\n)\s*\[?\s*([123])\s*학년\s*\]?\s*(?:\n|$)/g)].map(m=>Number(m[1]))
+    if(hits.length){ const d=Math.max(...hits); if(cur==null||d>=cur) cur=d }
+    if(cur==null) cur=1
+    groups[cur].push(page)
+  }
+  return groups
+}
+function makeTextChunksByPages(pages,maxChars=12000,overlapPages=1){
+  const chunks=[]; if(!pages?.length) return chunks
+  let i=0
+  while(i<pages.length){
+    let j=i,size=0
+    while(j<pages.length){ const n=size+pages[j].text.length; if(j>i&&n>maxChars) break; size=n; j++ }
+    chunks.push({ text:pages.slice(i,j).map(p=>p.text).join('\n') })
+    if(j>=pages.length) break
+    i=Math.max(j-overlapPages,i+1)
+  }
+  return chunks
+}
+function buildAbsoluteDisplayOrder(year,pageNo,idx){ return (Number(pageNo)||0)*1000+(idx+1) }
+function normalizeSubjectKey(s=''){
+  return String(s||'').trim().replace(/\s+/g,'').replace(/[ⅠIlⅼ]/g,'I').replace(/[Ⅱ]/g,'II').replace(/[Ⅲ]/g,'III').replace(/[１]/g,'1').replace(/[２]/g,'2').replace(/[３]/g,'3')
+}
+function dedupeGradeRows(rows){
+  const keyOf=g=>`${Number(g.year)||0}|${Number(g.semester)||0}|${String(g.group||'').replace(/\s+/g,'')}|${normalizeSubjectKey(g.subject||'')}|${g.courseType||''}`
+  const comp=g=>(g.rawScore!=null?1:0)+(g.avg!=null?1:0)+(g.stdev!=null?1:0)+(g.unit!=null?1:0)+(g.grade!=null?1:0)+(g.achievement?1:0)+(g.cohort!=null?1:0)
+  const typeRank=t=>t==='진로'?3:t==='체육예술'?2:(t==='일반'||t==='공통')?1:0
+  const orderVal=v=>Number.isFinite(Number(v))?Number(v):99999999
+  const best=new Map()
+  for(const g of rows||[]){
+    if(!String(g.subject||'').trim()) continue
+    const key=keyOf(g); const prev=best.get(key)
+    if(!prev){ best.set(key,g); continue }
+    if(typeRank(g.courseType)>typeRank(prev.courseType)){ best.set(key,g); continue }
+    if(typeRank(g.courseType)<typeRank(prev.courseType)) continue
+    if(comp(g)>comp(prev)){ best.set(key,g); continue }
+    if(comp(g)<comp(prev)) continue
+    if(orderVal(g.displayOrder)<orderVal(prev.displayOrder)){ best.set(key,g) }
+  }
+  return Array.from(best.values())
+}
+function normalizeGrades(raw){
+  return raw.map((g,i)=>{
+    let grade=null
+    if(g.grade!=null&&g.grade!==''){ const n=Number(g.grade); if(Number.isFinite(n)&&n>=1&&n<=9) grade=Math.round(n) }
+    let unit=null
+    if(g.unit!=null&&g.unit!==''){ const n=Number(g.unit); if(Number.isFinite(n)&&n>=1&&n<=10) unit=Math.round(n) }
+    let courseType=g.courseType||'일반'
+    if(grade!=null&&courseType==='진로') courseType='일반'
+    return {
+      id:i+1, year:Number(g.year)||null, semester:Number(g.semester)||null,
+      group:(g.group||'').trim(), subject:(g.subject||'').trim(), unit,
+      rawScore:(g.rawScore>=0&&g.rawScore<=100)?g.rawScore:null,
+      avg:(g.avg>=20&&g.avg<=100)?Math.round(g.avg*10)/10:null,
+      stdev:(g.stdev>=2&&g.stdev<=40)?g.stdev:null,
+      achievement:(g.achievement||'').trim()||null,
+      cohort:Number(g.cohort)||null, grade, courseType,
+    }
+  }).filter(g=>g.subject)
+}
+
+// ============================================================
+// AI: 생기부 PDF → 성적 배열 (원본 파이프라인)
 // ============================================================
 export async function extractGradesFromPdf(file, onProg){
   const text=await fullOcr(file, onProg)
   if(!text.trim()) throw new Error('OCR 텍스트가 비었습니다')
-  onProg?.('성적 정리 중…')
-  const prompt=`아래는 한국 고교 생활기록부 OCR 텍스트입니다. 교과 성적을 JSON 배열로 추출하세요. 반드시 JSON만:
-{"grades":[{"year":1,"term":1,"group":"국어","subject":"국어","unit":4,"grade":2,"rawScore":88,"mean":70,"stdev":12,"achievement":null,"courseType":"공통"}]}
+  const explicitYears=getConfirmedYears(text)
+  const pageGroups=groupPagesByYear(text)
+  const candidateYears=explicitYears.length?explicitYears:[1,2,3].filter(y=>(pageGroups[y]||[]).length)
+
+  const makePrompt=(year,pageText)=>`아래는 한국 고등학교 생활기록부 OCR 텍스트 일부입니다. 실제로 보이는 과목 행만 JSON으로 추출하세요.
+반드시 JSON 객체만 반환:
+{"grades":[{"year":${year},"semester":1,"group":"국어","subject":"문학","unit":4,"rawScore":94,"avg":68.8,"stdev":16.0,"achievement":"A","cohort":344,"grade":1,"courseType":"공통","pageNo":1,"rowOrder":1}]}
 규칙:
-- courseType: 1학년 일반교과="공통", 2~3학년 일반교과="일반"(석차등급 있음), 진로선택="진로"(석차등급 없고 성취도 A/B/C), 체육·예술="체육예술".
-- group은 교과(국어/수학/영어/과학/사회/한국사/체육/예술 등).
-- 진로선택은 grade=null, achievement에 A/B/C.
-- 같은 학기 같은 교과에 여러 과목 있어도 합치지 말 것. 없는 값은 null.
+- 실제로 보이는 과목 행을 위에서 아래 순서대로 모두 추출
+- 같은 학기/같은 교과에 여러 과목이 있어도 절대 합치지 말 것
+- 학기/교과 셀이 병합되어 아래 행이 비어 보이면 바로 위 값 계승
+- 일반/공통은 grade 1~9, 진로/체육예술은 grade=null
+- 진로는 courseType="진로", 체육/음악/미술은 courseType="체육예술"
+- 1학년 일반교과는 courseType="공통", 2~3학년 일반교과는 courseType="일반"
+- 숫자는 텍스트 그대로 사용, 없으면 null
+- pageNo는 [N페이지]의 N, rowOrder는 그 페이지 안에서 위→아래 순서
+- 없는 과목/학년/점수는 지어내지 말 것
 ---
-${text.slice(0,24000)}`
-  const resp=await callOAI([{role:'user',content:prompt}],{model:'mistral-small-latest',maxTokens:8000,json:true})
-  const raw=safeJson(resp)
-  const arr=Array.isArray(raw)?raw:(raw?.grades||[])
-  return arr.map(g=>({
-    year:Number(g.year)||null, term:Number(g.term)||null,
-    group:String(g.group||g.교과||'').trim(), subject:String(g.subject||g.과목||'').trim(),
-    unit:Number(g.unit)||1, grade:(g.grade==null?null:Number(g.grade)),
-    rawScore:g.rawScore!=null?Number(g.rawScore):null, mean:g.mean!=null?Number(g.mean):null, stdev:g.stdev!=null?Number(g.stdev):null,
-    achievement:g.achievement?String(g.achievement).trim().toUpperCase():null,
-    courseType:['공통','일반','진로','체육예술'].includes(g.courseType)?g.courseType:(g.grade==null?'진로':'일반'),
-  }))
+${pageText}`
+
+  let rows=[]
+  for(const year of candidateYears){
+    const pages=pageGroups[year]||[]
+    if(!pages.length) continue
+    const chunks=makeTextChunksByPages(pages,12000,1)
+    for(let idx=0; idx<chunks.length; idx++){
+      onProg?.(`${year}학년 청크 ${idx+1}/${chunks.length} 분석 중…`)
+      const resp=await callOAI([{role:'user',content:makePrompt(year,chunks[idx].text)}],{model:'mistral-small-latest',maxTokens:5000,json:true,onRetry:onProg})
+      const j=safeJson(resp)
+      rows=rows.concat((j.grades||[]).map((g,i)=>{
+        const pageNo=Number(g.pageNo)||1, rowOrder=Number(g.rowOrder)||i+1
+        return { ...g, year, displayOrder:buildAbsoluteDisplayOrder(year,pageNo,rowOrder) }
+      }))
+    }
+  }
+  const deduped=dedupeGradeRows(rows)
+  let cleaned=normalizeGrades(deduped)
+  if(explicitYears.length) cleaned=cleaned.filter(g=>explicitYears.includes(g.year))
+  // calc 엔진 호환: group 필드 유지, semester→term 별칭
+  return cleaned.map(g=>({ ...g, term:g.semester }))
 }
