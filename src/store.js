@@ -93,28 +93,40 @@ export async function searchAdmissions({ univ, dept, region, type, track, gpaMax
     return true
   }).slice(0, limit)
 }
+// 1000행 제한을 피해 컬럼 전체를 페이지로 나눠 받아온다
+async function fetchAllColumn(select, applyFilter){
+  const out = []
+  const size = 1000
+  for(let from=0; from<40000; from+=size){
+    let q = supabase.from('수시입결').select(select).range(from, from+size-1)
+    if(applyFilter) q = applyFilter(q)
+    const { data, error } = await q
+    if(error || !data || data.length===0) break
+    out.push(...data)
+    if(data.length < size) break
+  }
+  return out
+}
+
 export async function distinctRegions(){
   if(isConfigured){
-    // 전체에서 지역 목록 (중복 제거는 클라이언트에서)
-    const { data } = await supabase.from('수시입결').select('region').limit(30000)
-    return [...new Set((data||[]).map(d=>d.region).filter(Boolean))].sort()
+    const data = await fetchAllColumn('region')
+    return [...new Set(data.map(d=>d.region).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ko'))
   }
   return ['서울','경기','인천','충남','충북','대전','세종','대구','광주','부산','경북','경남','전남','전북','강원','울산','제주','전북특별자치도','강원특별자치도']
 }
 export async function distinctTypes(){
   if(isConfigured){
-    const { data } = await supabase.from('수시입결').select('type').limit(30000)
-    return [...new Set((data||[]).map(d=>d.type).filter(Boolean))].sort()
+    const data = await fetchAllColumn('type')
+    return [...new Set(data.map(d=>d.type).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ko'))
   }
   return ['학생부종합','학생부교과','논술','실기/실적']
 }
 // 전체 대학 목록 (지역으로 좁힐 수 있음)
 export async function distinctUnivs(region){
   if(isConfigured){
-    let q = supabase.from('수시입결').select('univ,region').limit(30000)
-    if(region) q = q.eq('region', region)
-    const { data } = await q
-    return [...new Set((data||[]).map(d=>d.univ).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ko'))
+    const data = await fetchAllColumn('univ', q => region ? q.eq('region', region) : q)
+    return [...new Set(data.map(d=>d.univ).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ko'))
   }
   const sample = await fetch('/admissions_sample.json').then(r=>r.json()).catch(()=>[])
   return [...new Set(sample.filter(a=>!region||a.region===region).map(a=>a.univ).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ko'))
@@ -123,10 +135,12 @@ export async function distinctUnivs(region){
 export async function distinctDepts(univ, track){
   if(!univ) return []
   if(isConfigured){
-    let q = supabase.from('수시입결').select('dept,track').eq('univ', univ).limit(30000)
-    if(track) q = q.eq('track', track)
-    const { data } = await q
-    return [...new Set((data||[]).map(d=>d.dept).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ko'))
+    const data = await fetchAllColumn('dept,track', q => {
+      q = q.eq('univ', univ)
+      if(track) q = q.eq('track', track)
+      return q
+    })
+    return [...new Set(data.map(d=>d.dept).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ko'))
   }
   const sample = await fetch('/admissions_sample.json').then(r=>r.json()).catch(()=>[])
   return [...new Set(sample.filter(a=>a.univ===univ && (!track||a.track===track)).map(a=>a.dept).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ko'))
