@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import { isConfigured } from './supabase'
 import * as db from './store'
+import * as eng from './engine'
 
 const JUDGMENTS = ['안정','적정','도전','상향']
 const STATUSES  = ['관심','지원확정','보류','제외']
@@ -23,10 +24,13 @@ export default function App(){
   const [students, setStudents] = useState([])
   const [selStudent, setSelStudent] = useState(null)
   const [toast, setToast] = useState('')
+  const [guides, setGuides] = useState({})
 
   const flash = useCallback(msg => { setToast(msg); setTimeout(()=>setToast(''), 2000) }, [])
 
   useEffect(()=>{ db.listTeachers().then(setTeachers) }, [])
+  useEffect(()=>{ db.loadGuides().then(setGuides) }, [])
+  const reloadGuides = useCallback(async ()=>{ setGuides(await db.loadGuides()) }, [])
   useEffect(()=>{
     db.listStudents(teacherId || undefined).then(setStudents)
   }, [teacherId])
@@ -51,6 +55,7 @@ export default function App(){
             disabled={!selStudent}>② 관심학과 담기</button>
           <button className={`tab ${tab==='report'?'active':''}`} onClick={()=>setTab('report')}
             disabled={!selStudent}>③ 최종 지원 보고서</button>
+          <button className={`tab ${tab==='guides'?'active':''}`} onClick={()=>setTab('guides')}>📐 모집요강</button>
         </div>
         <div className="spacer" />
         <TeacherPicker {...{teachers, teacherId, setTeacherId, setTeachers, flash}} />
@@ -71,10 +76,13 @@ export default function App(){
             refresh={refreshStudents} flash={flash} goSearch={()=>setTab('search')} />
         )}
         {tab==='search' && selStudent && (
-          <SearchTab student={selStudent} flash={flash} />
+          <SearchTab student={selStudent} guides={guides} flash={flash} />
         )}
         {tab==='report' && selStudent && (
-          <ReportTab student={selStudent} teacherName={teacherName} />
+          <ReportTab student={selStudent} teacherName={teacherName} guides={guides} />
+        )}
+        {tab==='guides' && (
+          <GuidesTab guides={guides} reloadGuides={reloadGuides} flash={flash} />
         )}
       </div>
 
@@ -326,12 +334,48 @@ function StudentDetail({ student, onSaved, flash, setSelStudent }){
         <button className="btn primary" onClick={save}>변경 저장</button>
         <button className="btn ghost" onClick={()=>setSelStudent(null)}>새 학생 추가로</button>
       </div>
+
+      <GradebookUploader student={student} onSaved={onSaved} setSelStudent={setSelStudent} flash={flash} />
+    </div>
+  )
+}
+
+function GradebookUploader({ student, onSaved, setSelStudent, flash }){
+  const [busy, setBusy] = useState('')
+  const gradeCount = student.grades?.length || 0
+  const upload = async (file)=>{
+    if(!file) return
+    if(!eng.hasAI){ flash('AI 키가 없습니다 (Vercel 환경변수 VITE_MISTRAL_KEY)'); return }
+    try{
+      const grades = await eng.extractGradesFromPdf(file, msg=>setBusy(msg))
+      await db.saveStudentGrades(student.id, grades)
+      const overall = eng.calcOverallAvg(grades)
+      setSelStudent({ ...student, grades })
+      await onSaved()
+      flash(`성적 ${grades.length}과목 추출 · 전체평균 ${overall!=null?overall.toFixed(2):'–'}`)
+    }catch(err){ flash('추출 실패: '+(err?.message||err)) }
+    finally{ setBusy('') }
+  }
+  return (
+    <div style={{marginTop:14,borderTop:'1px solid var(--line)',paddingTop:12}}>
+      <div style={{fontSize:12,fontWeight:700,color:'var(--sub)',marginBottom:6}}>
+        생기부 성적 {gradeCount>0 ? `· ${gradeCount}과목 등록됨 (전체평균 ${(eng.calcOverallAvg(student.grades)??0).toFixed(2)})` : '· 미등록'}
+      </div>
+      {busy && <div className="muted" style={{fontSize:12,marginBottom:6}}>{busy}</div>}
+      <label className="btn sm" style={{display:'inline-block'}}>
+        생기부 PDF 업로드
+        <input type="file" accept="application/pdf,image/*" style={{display:'none'}}
+          onChange={e=>upload(e.target.files?.[0])} />
+      </label>
+      <div className="muted" style={{fontSize:11,marginTop:6}}>
+        PDF를 올리면 AI가 교과 성적을 자동으로 읽어 저장합니다. 이후 관심학과 담기에서 대학별 교과등급이 자동 계산됩니다.
+      </div>
     </div>
   )
 }
 
 /* ---------------- ② 관심학과 담기 (입결 검색) ---------------- */
-function SearchTab({ student, flash }){
+function SearchTab({ student, guides, flash }){
   const [q, setQ] = useState({ univ:'', dept:'', region:'', type:'', track: student.track||'' })
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(false)
@@ -365,11 +409,15 @@ function SearchTab({ student, flash }){
   }, [q.univ, q.dept, q.region, q.type, q.track, onlyReachable, hasFilter, student.gpa])
 
   const pickedIds = useMemo(()=> new Set(picks.map(p=>p.admission_id)), [picks])
-  const add = async (adm)=>{
+  const add = async (adm, myGrade)=>{
     if(pickedIds.has(adm.id)){ flash('이미 담긴 학과입니다'); return }
     const p = await db.addPick(student.id, adm)
-    const sug = suggestJudgment(student.gpa, adm.cut26)
-    if(sug){ await db.updatePick(p.id, { judgment: sug }); p.judgment = sug }
+    const basis = myGrade!=null ? myGrade : student.gpa
+    const sug = suggestJudgment(basis, adm.cut26)
+    const patch = {}
+    if(sug) patch.judgment = sug
+    if(myGrade!=null) patch.reason = `내 교과 ${myGrade.toFixed(2)} · 26컷 ${adm.cut26 ?? '–'}`
+    if(Object.keys(patch).length){ await db.updatePick(p.id, patch); Object.assign(p, patch) }
     setPicks(await db.listPicks(student.id)); flash(`${adm.univ} ${adm.dept} 담김`)
   }
 
@@ -423,21 +471,27 @@ function SearchTab({ student, flash }){
             <table>
               <thead><tr>
                 <th></th><th>대학</th><th>계열</th><th>모집단위</th><th>전형유형</th><th>전형명</th>
-                <th className="num">인원</th><th className="num">26컷</th><th className="num">25컷</th>
+                <th className="num">인원</th><th className="num">내 교과</th><th className="num">26컷</th><th className="num">25컷</th>
                 <th className="num">26경쟁</th><th>판정</th><th>최저</th><th>고사일</th><th>유의</th>
               </tr></thead>
               <tbody>
                 {!hasFilter && (
-                  <tr><td colSpan={14} className="empty">위 필터를 골라 보세요. 지역을 고르면 그 지역 대학만, 대학을 고르면 그 대학 학과만 목록에 뜹니다. 대학·학과 칸은 클릭하면 목록이 펼쳐지고, 글자를 치면 걸러집니다. 학과명만으로도 검색됩니다.</td></tr>
+                  <tr><td colSpan={15} className="empty">위 필터를 골라 보세요. 지역을 고르면 그 지역 대학만, 대학을 고르면 그 대학 학과만 목록에 뜹니다. 대학·학과 칸은 클릭하면 목록이 펼쳐지고, 글자를 치면 걸러집니다. 학과명만으로도 검색됩니다.</td></tr>
                 )}
                 {hasFilter && rows.length===0 && !loading && (
-                  <tr><td colSpan={14} className="empty">조건에 맞는 입결이 없습니다. 필터를 넓혀 보세요.</td></tr>
+                  <tr><td colSpan={15} className="empty">조건에 맞는 입결이 없습니다. 필터를 넓혀 보세요.</td></tr>
                 )}
                 {rows.map(a=>{
-                  const j = suggestJudgment(student.gpa, a.cut26)
+                  // 학생 성적이 있으면 이 대학·전형 방식으로 교과등급 계산
+                  const rowForCalc = { univ:a.univ, type:a.type, name:a.name, subjects:a.subjects }
+                  const myGrade = student.grades ? eng.gradeForRow(rowForCalc, student.grades, guides) : null
+                  const src = student.grades ? eng.gradeSource(rowForCalc, student.grades, guides) : null
+                  // 판정: 계산된 내 교과등급 우선, 없으면 입력한 내신
+                  const basis = myGrade!=null ? myGrade : student.gpa
+                  const j = suggestJudgment(basis, a.cut26)
                   return (
                     <tr key={a.id}>
-                      <td><button className="btn sm" disabled={pickedIds.has(a.id)} onClick={()=>add(a)}>
+                      <td><button className="btn sm" disabled={pickedIds.has(a.id)} onClick={()=>add(a, myGrade)}>
                         {pickedIds.has(a.id)?'담김':'담기'}</button></td>
                       <td><b>{a.univ}</b></td>
                       <td>{a.track}</td>
@@ -445,6 +499,7 @@ function SearchTab({ student, flash }){
                       <td>{a.type}</td>
                       <td>{a.name}</td>
                       <td className="num">{fmt(a.quota)}</td>
+                      <td className="num" title={src||''}>{myGrade!=null ? myGrade.toFixed(2) : '–'}</td>
                       <td className="num">{fmt(a.cut26)}</td>
                       <td className="num">{fmt(a.cut25)}</td>
                       <td className="num">{fmt(a.comp26)}</td>
@@ -518,7 +573,7 @@ function PickBoard({ student, picks, setPicks, flash }){
 }
 
 /* ---------------- ③ 최종 지원 보고서 (인쇄) ---------------- */
-function ReportTab({ student, teacherName }){
+function ReportTab({ student, teacherName, guides }){
   const [picks, setPicks] = useState([])
   useEffect(()=>{ db.listPicks(student.id).then(setPicks) }, [student.id])
 
@@ -599,6 +654,58 @@ function ReportTab({ student, teacherName }){
 }
 
 /* ---------------- utils ---------------- */
+function GuidesTab({ guides, reloadGuides, flash }){
+  const [busy, setBusy] = useState('')
+  const names = Object.keys(guides).sort((a,b)=>a.localeCompare(b,'ko'))
+
+  const upload = async (files)=>{
+    if(!files || !files.length) return
+    if(!eng.hasAI){ flash('AI 키가 없습니다 (Vercel 환경변수 VITE_MISTRAL_KEY)'); return }
+    try{
+      const g = await eng.parseGuideFromImages([...files], msg=>setBusy(msg))
+      if(!g.university){ flash('대학명을 못 읽었습니다. 표지/모집단위 페이지를 포함해 주세요'); return }
+      await db.saveGuide(g.university, g)
+      await reloadGuides()
+      flash(`${g.university} 모집요강 등록 (전형 ${g.tracks.length}개) · 전체 공유됨`)
+    }catch(err){ flash('분석 실패: '+(err?.message||err)) }
+    finally{ setBusy('') }
+  }
+
+  return (
+    <div className="pane pane-right">
+      <div className="card" style={{maxWidth:820}}>
+        <h3 style={{margin:0}}>모집요강 규칙 (전체 공유)</h3>
+        <div className="muted" style={{fontSize:13,marginTop:6}}>
+          대학 모집요강 이미지(또는 캡처 여러 장)를 올리면 AI가 반영교과·가중치·진로선택 처리 방식을 읽어 계산 규칙을 만듭니다.
+          한 번 등록하면 모든 담임이 공유하고, 관심학과 담기에서 그 대학은 정밀 교과등급으로 계산됩니다. 아직 안 올린 대학은 통통통 반영과목으로 근사 계산합니다.
+        </div>
+        {busy && <div className="banner" style={{marginTop:10}}>{busy}</div>}
+        <div style={{marginTop:12}}>
+          <label className="btn primary" style={{display:'inline-block'}}>
+            모집요강 이미지 올리기
+            <input type="file" accept="image/*" multiple style={{display:'none'}}
+              onChange={e=>upload(e.target.files)} />
+          </label>
+          {!eng.hasAI && <span className="muted" style={{marginLeft:10,fontSize:12}}>※ AI 키 미설정 — Vercel 환경변수 VITE_MISTRAL_KEY 필요</span>}
+        </div>
+      </div>
+
+      <div className="card" style={{maxWidth:820}}>
+        <h3>등록된 대학 ({names.length})</h3>
+        {names.length===0 && <div className="empty">아직 등록된 모집요강이 없습니다.</div>}
+        {names.map(u=>(
+          <div key={u} style={{borderBottom:'1px solid var(--line)',padding:'8px 0'}}>
+            <div style={{fontWeight:700}}>{u}</div>
+            <div className="muted" style={{fontSize:12}}>
+              {(guides[u].tracks||[]).map(t=> `${t.trackName}${t.subjectGroups?.length?` (${t.subjectGroups.join('·')})`:''}`).join(' / ') || '전형 정보 없음'}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function num(v){ if(v===''||v===null||v===undefined) return null; const n=Number(v); return Number.isNaN(n)?null:n }
 function parseCsv(text, teacherId){
   const lines = text.trim().split(/\r?\n/).filter(Boolean)
