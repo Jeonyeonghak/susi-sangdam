@@ -106,24 +106,76 @@ function jinroAchievToGrade(achievement, jinroStr){
   }
   return map[a] ?? null
 }
-export function calcGradeAvg(grades, subjectGroups, jinroHandling){
+// opts: { topN, scoreTable }
+//  topN: 상위 N개 과목만 반영 (등급 좋은 순). scoreTable: {1:100,2:96,...} 등급→배점
+export function calcGradeAvg(grades, subjectGroups, jinroHandling, opts={}){
+  const { topN=null, scoreTable=null } = opts
   const groups=subjectGroups||['국어','수학','영어','과학','사회']
   const allGroups=!subjectGroups||subjectGroups.length===0
-  const base=(grades||[]).filter(g=>{
-    if(g.courseType==='체육예술') return false
-    if(g.courseType==='진로') return false
-    if(g.grade==null) return false
-    const n=Number(g.grade); if(!Number.isFinite(n)||n<1||n>9) return false
-    if(!allGroups && !groups.some(gr=>String(g.group||'').includes(gr))) return false
-    return true
-  })
-  let sumW=0,sumG=0
-  for(const g of base){ const u=Number(g.unit)||1; sumG+=Number(g.grade)*u; sumW+=u }
-  if(jinroHandling && jinroHandling!=='미반영'){
-    const jinro=(grades||[]).filter(g=>g.courseType==='진로' && (allGroups||groups.some(gr=>String(g.group||'').includes(gr))))
-    for(const g of jinro){ const cv=jinroAchievToGrade(g.achievement,jinroHandling); if(cv!=null){ const u=Number(g.unit)||1; sumG+=cv*u; sumW+=u } }
+  const inGroup=g=> allGroups || groups.some(gr=>String(g.group||'').includes(gr))
+
+  // 반영 대상 과목 모으기 (일반/공통 + 조건부 진로)
+  const items=[]
+  for(const g of (grades||[])){
+    if(g.courseType==='체육예술') continue
+    if(g.courseType==='진로') continue
+    if(g.grade==null) continue
+    const n=Number(g.grade); if(!Number.isFinite(n)||n<1||n>9) continue
+    if(!inGroup(g)) continue
+    items.push({ grade:n, unit:Number(g.unit)||1 })
   }
+  if(jinroHandling && jinroHandling!=='미반영'){
+    for(const g of (grades||[])){
+      if(g.courseType!=='진로' || !inGroup(g)) continue
+      const cv=jinroAchievToGrade(g.achievement,jinroHandling)
+      if(cv!=null) items.push({ grade:cv, unit:Number(g.unit)||1 })
+    }
+  }
+  if(!items.length) return null
+
+  // 상위 N개만: 등급 좋은(작은) 순 정렬 후 앞 N개
+  let use=items
+  if(topN && topN>0 && items.length>topN){
+    use=[...items].sort((a,b)=>a.grade-b.grade).slice(0,topN)
+  }
+
+  // 배점표가 있으면 점수로 환산 → 가중평균 점수 → 등급 스케일로 역환산
+  if(scoreTable && Object.keys(scoreTable).length){
+    let sW=0,sScore=0
+    for(const it of use){
+      const sc = scoreTable[it.grade] ?? scoreTable[Math.round(it.grade)] ?? null
+      if(sc==null) continue
+      sScore+=sc*it.unit; sW+=it.unit
+    }
+    if(sW>0){
+      const avgScore=sScore/sW
+      return scoreToGrade(avgScore, scoreTable) // 등급으로 역환산해 통통통 컷과 비교 가능
+    }
+  }
+
+  // 기본: 등급 가중평균
+  let sumW=0,sumG=0
+  for(const it of use){ sumG+=it.grade*it.unit; sumW+=it.unit }
   return sumW>0 ? sumG/sumW : null
+}
+// 배점 점수 → 가장 가까운 등급으로 역환산 (배점표 구간 보간)
+function scoreToGrade(score, scoreTable){
+  const pairs=Object.entries(scoreTable).map(([g,s])=>({g:Number(g),s:Number(s)})).sort((a,b)=>a.g-b.g)
+  if(!pairs.length) return null
+  // score가 표의 두 등급 점수 사이에 있으면 선형보간
+  for(let i=0;i<pairs.length-1;i++){
+    const hi=pairs[i], lo=pairs[i+1] // 등급 낮을수록 점수 높음
+    const sHi=hi.s, sLo=lo.s
+    if((score<=sHi && score>=sLo) || (score>=sHi && score<=sLo)){
+      if(sHi===sLo) return hi.g
+      const t=(sHi-score)/(sHi-sLo)
+      return hi.g + t*(lo.g-hi.g)
+    }
+  }
+  // 범위 밖이면 가장 가까운 등급
+  let best=pairs[0], bd=Math.abs(score-pairs[0].s)
+  for(const p of pairs){ const d=Math.abs(score-p.s); if(d<bd){bd=d;best=p} }
+  return best.g
 }
 export function calcOverallAvg(grades){ return calcGradeAvg(grades,null,null) }
 
@@ -187,10 +239,15 @@ export function gradeForRow(row, grades, uniGuides){
     const guide=findGuideForUni(uniGuides, row.univ)
     if(guide){
       const gt=findGuideTrack(guide,row)
-      if(gt) return calcGradeAvg(grades, gt.subjectGroups?.length?gt.subjectGroups:null, gt.jinroHandling||null)
-      // track 매칭 실패 → 그 대학 교과전형 중 반영과목이 있는 첫 track 사용
-      const anyTrack=(guide.tracks||[]).find(t=>t.subjectGroups?.length)
-      if(anyTrack) return calcGradeAvg(grades, anyTrack.subjectGroups, anyTrack.jinroHandling||null)
+      const useTrack = gt || (guide.tracks||[]).find(t=>t.subjectGroups?.length)
+      if(useTrack){
+        return calcGradeAvg(
+          grades,
+          useTrack.subjectGroups?.length?useTrack.subjectGroups:null,
+          useTrack.jinroHandling||null,
+          { topN:useTrack.topN||null, scoreTable:useTrack.scoreTable||null }
+        )
+      }
     }
     const groups=parseSubjectGroups(row.subjects)
     return calcGradeAvg(grades, groups, null)
@@ -221,30 +278,43 @@ export function gradeSource(row, grades, uniGuides){
 export async function parseGuideFromImages(files, onProg){
   const imgs=[]
   for(const f of files){ imgs.push(await fileToDataUrl(f)) }
-  const prompt=`These images are pages from a Korean university admission guide. Extract 교과전형/종합전형 info as JSON.
+  const prompt=`These images are pages from a Korean university admission guide (교과전형 계산 방법). Extract as JSON.
 Return ONLY this JSON shape:
-{"university":"대학명(한글)","tracks":[{"trackName":"전형명 정확히(모집요강 그대로)","trackType":"교과" or "종합","subjectGroups":["국어","수학","영어","과학"],"weights":{"국어":30,"수학":30,"영어":20,"과학":20},"jinroHandling":"미반영" or "A:1등급,B:3등급,C:5등급" or null,"topN":null or number,"cutoffNote":"자유문자열" or null,"evalAreas":["학업역량","진로역량","공동체역량"]}],"changeNotes":[]}
-규칙: trackName은 정식명칭 그대로. weights는 숫자 객체(합100). 종합전형은 weights={},subjectGroups=[],evalAreas만. 교과전형은 weights,subjectGroups 채우고 evalAreas=[]. 불명확하면 null. 추측 금지.`
+{"university":"대학명(한글)","tracks":[{"trackName":"전형명 정확히(모집요강 그대로)","trackType":"교과" or "종합","subjectGroups":["국어","수학","영어","과학"],"jinroHandling":"미반영" or "A:1등급,B:3등급,C:5등급" or null,"topN":null or number,"scoreTable":null or {"1":100,"2":96,"3":92,"4":86,"5":70,"6":55,"7":40,"8":20,"9":0},"cutoffNote":"자유문자열" or null,"evalAreas":["학업역량","진로역량"]}],"changeNotes":[]}
+중요 규칙:
+- subjectGroups: 반영교과. "국어·수학·영어·과학" 처럼 반영하는 교과만. 계열별로 다르면 각 track으로 분리.
+- topN: "우수한 10개 과목", "상위 10과목" 처럼 상위 N개만 반영하면 그 숫자. 전과목이면 null.
+- scoreTable: "등급별 반영점수" 또는 "변환등급 배점" 표가 있으면 {등급:점수}로. 예: 1등급 100, 2등급 96... 없으면 null.
+- jinroHandling: 진로선택과목 처리. "반영하지 않음"이면 "미반영". "A는 1등급, B는 3등급"처럼 환산하면 "A:1등급,B:3등급,C:5등급".
+- trackName은 모집요강의 정식 명칭 그대로. 종합전형은 subjectGroups=[], scoreTable=null.
+- 불명확하면 null. 절대 추측하지 말 것. 특히 반영교과 개수를 지어내지 말 것("4개 중 3개" 같은 표현 금지 — 실제 교과명만).`
   onProg?.('모집요강 분석 중…')
   const resp=await callOAI([{role:'user',content:[{type:'text',text:prompt},...visionContent(imgs)]}],{maxTokens:3000})
   const raw=safeJson(resp)
   const out={ university:String(raw?.university||'').trim(), tracks:[], changeNotes:Array.isArray(raw?.changeNotes)?raw.changeNotes.map(String).filter(Boolean):[] }
   for(const t of (Array.isArray(raw?.tracks)?raw.tracks:[])){
     if(!t||typeof t!=='object') continue
-    let weights={}
-    if(t.weights && typeof t.weights==='object' && !Array.isArray(t.weights)){
-      for(const [k,v] of Object.entries(t.weights)){ const n=Number(v); if(Number.isFinite(n)&&n>0) weights[String(k).trim()]=n }
-    }
     let subjectGroups=[]
     if(Array.isArray(t.subjectGroups)) for(const s of t.subjectGroups){ if(typeof s==='string'&&s.trim()) subjectGroups.push(s.trim()) }
     let evalAreas=[]
     if(Array.isArray(t.evalAreas)) for(const a of t.evalAreas){ if(typeof a==='string'&&a.trim()) evalAreas.push(a.trim()); else if(a?.name) evalAreas.push(String(a.name).trim()) }
+    // scoreTable 정규화: {등급:점수} 숫자만
+    let scoreTable=null
+    if(t.scoreTable && typeof t.scoreTable==='object' && !Array.isArray(t.scoreTable)){
+      scoreTable={}
+      for(const [k,v] of Object.entries(t.scoreTable)){
+        const g=Number(k), s=Number(v)
+        if(Number.isFinite(g)&&g>=1&&g<=9&&Number.isFinite(s)) scoreTable[g]=s
+      }
+      if(!Object.keys(scoreTable).length) scoreTable=null
+    }
     out.tracks.push({
       trackName:String(t.trackName||'').trim(),
       trackType:(t.trackType==='교과'||t.trackType==='종합')?t.trackType:(subjectGroups.length?'교과':'종합'),
-      subjectGroups, weights,
+      subjectGroups,
       jinroHandling:t.jinroHandling?String(t.jinroHandling).trim():null,
-      topN:Number.isFinite(Number(t.topN))?Number(t.topN):null,
+      topN:Number.isFinite(Number(t.topN))&&Number(t.topN)>0?Number(t.topN):null,
+      scoreTable,
       cutoffNote:t.cutoffNote?String(t.cutoffNote).trim():null,
       evalAreas,
     })
