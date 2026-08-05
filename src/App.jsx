@@ -829,30 +829,106 @@ function GuidesTab({ guides, reloadGuides, flash }){
 
       <div className="card" style={{maxWidth:820}}>
         <h3>등록된 대학 ({names.length})</h3>
+        <div className="muted" style={{fontSize:12,marginBottom:8}}>
+          AI가 읽은 규칙입니다. 틀렸으면 각 전형의 <b>수정</b>을 눌러 반영교과·상위N·진로처리·배점표를 직접 고치세요. 저장하면 전체 담임이 공유합니다.
+        </div>
         {names.length===0 && <div className="empty">아직 등록된 모집요강이 없습니다.</div>}
         {names.map(u=>(
-          <div key={u} style={{borderBottom:'1px solid var(--line)',padding:'8px 0',display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:8}}>
-            <div className="grow">
-              <div style={{fontWeight:700}}>{u}</div>
-              <div style={{fontSize:12,marginTop:4}}>
-                {(guides[u].tracks||[]).map((t,i)=>(
-                  <div key={i} style={{padding:'3px 0',borderTop:i?'1px dashed var(--line)':undefined}}>
-                    <b>{t.trackName}</b> <span className="muted">[{t.trackType}]</span>
-                    {t.subjectGroups?.length ? ` · 반영: ${t.subjectGroups.join('·')}` : ' · 반영과목 없음(전체평균)'}
-                    {t.topN ? ` · 상위${t.topN}과목` : ''}
-                    {t.scoreTable ? ' · 배점표✓' : ''}
-                    {t.jinroHandling ? ` · 진로: ${t.jinroHandling}` : ''}
-                  </div>
-                ))}
-                {!(guides[u].tracks||[]).length && <span className="muted">전형 정보 없음</span>}
+          <GuideCard key={u} univ={u} guide={guides[u]} reloadGuides={reloadGuides} flash={flash} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function GuideCard({ univ, guide, reloadGuides, flash }){
+  const [editIdx, setEditIdx] = useState(-1)
+  const tracks = guide.tracks || []
+
+  const saveTrack = async (idx, patch)=>{
+    const newTracks = tracks.map((t,i)=> i===idx ? { ...t, ...patch } : t)
+    await db.saveGuide(univ, { ...guide, tracks:newTracks })
+    await reloadGuides(); setEditIdx(-1); flash('수정 저장됨 · 전체 공유')
+  }
+
+  return (
+    <div style={{borderBottom:'1px solid var(--line)',padding:'8px 0'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+        <div style={{fontWeight:700}}>{univ}</div>
+        <button className="btn sm ghost danger" onClick={async()=>{
+          if(!confirm(`"${univ}" 모집요강을 삭제할까요?`)) return
+          await db.deleteGuide(univ); await reloadGuides(); flash(`${univ} 삭제됨`)
+        }}>대학 삭제</button>
+      </div>
+      <div style={{fontSize:12,marginTop:4}}>
+        {tracks.map((t,i)=>(
+          <div key={i} style={{padding:'5px 0',borderTop:i?'1px dashed var(--line)':undefined}}>
+            {editIdx===i ? (
+              <TrackEditor track={t} onSave={patch=>saveTrack(i,patch)} onCancel={()=>setEditIdx(-1)} />
+            ) : (
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:8}}>
+                <div className="grow">
+                  <b>{t.trackName||'(전형명 없음)'}</b> <span className="muted">[{t.trackType}]</span>
+                  {t.subjectGroups?.length ? ` · 반영: ${t.subjectGroups.join('·')}` : ' · 반영과목 없음(전체평균)'}
+                  {t.topN ? ` · 상위${t.topN}과목` : ''}
+                  {t.scoreTable ? ' · 배점표✓' : ''}
+                  {t.jinroHandling ? ` · 진로: ${t.jinroHandling}` : ''}
+                </div>
+                <button className="btn sm ghost" onClick={()=>setEditIdx(i)}>수정</button>
               </div>
-            </div>
-            <button className="btn sm ghost danger" onClick={async()=>{
-              if(!confirm(`"${u}" 모집요강을 삭제할까요?`)) return
-              await db.deleteGuide(u); await reloadGuides(); flash(`${u} 삭제됨`)
-            }}>삭제</button>
+            )}
           </div>
         ))}
+        {!tracks.length && <span className="muted">전형 정보 없음</span>}
+      </div>
+    </div>
+  )
+}
+
+function TrackEditor({ track, onSave, onCancel }){
+  const [subj, setSubj] = useState((track.subjectGroups||[]).join(','))
+  const [topN, setTopN] = useState(track.topN||'')
+  const [jinro, setJinro] = useState(track.jinroHandling||'')
+  const [scoreStr, setScoreStr] = useState(
+    track.scoreTable ? Object.entries(track.scoreTable).map(([g,s])=>`${g}:${s}`).join(', ') : ''
+  )
+  const save = ()=>{
+    const subjectGroups = subj.split(/[,\s·]+/).map(s=>s.trim()).filter(Boolean)
+    let scoreTable = null
+    if(scoreStr.trim()){
+      scoreTable = {}
+      for(const part of scoreStr.split(/[,\n]/)){
+        const m = part.match(/(\d)\s*[:：]\s*([\d.]+)/)
+        if(m) scoreTable[Number(m[1])] = Number(m[2])
+      }
+      if(!Object.keys(scoreTable).length) scoreTable = null
+    }
+    onSave({
+      subjectGroups,
+      topN: topN==='' ? null : Number(topN),
+      jinroHandling: jinro.trim() || null,
+      scoreTable,
+    })
+  }
+  return (
+    <div style={{background:'#fafbfc',border:'1px solid var(--line)',borderRadius:8,padding:10}}>
+      <div style={{fontWeight:700,marginBottom:6}}>{track.trackName} <span className="muted">[{track.trackType}]</span></div>
+      <label className="field"><span>반영교과 (쉼표로 구분, 예: 국어,수학,영어,과학)</span>
+        <input className="inp" value={subj} onChange={e=>setSubj(e.target.value)} placeholder="국어,수학,영어,과학" /></label>
+      <div className="row">
+        <label className="field grow"><span>상위 N과목 (전과목이면 빈칸)</span>
+          <input className="inp" value={topN} onChange={e=>setTopN(e.target.value)} placeholder="예: 10" /></label>
+        <label className="field grow"><span>진로선택 처리</span>
+          <input className="inp" value={jinro} onChange={e=>setJinro(e.target.value)} placeholder="미반영 또는 A:1등급,B:3등급,C:5등급" /></label>
+      </div>
+      <label className="field"><span>배점표 (등급:점수, 없으면 빈칸)</span>
+        <input className="inp" value={scoreStr} onChange={e=>setScoreStr(e.target.value)} placeholder="1:100, 2:96, 3:92, 4:86, 5:70, 6:55, 7:40, 8:20, 9:0" /></label>
+      <div className="muted" style={{fontSize:11,marginBottom:8}}>
+        종합·논술이면 반영교과를 비우세요(전체평균). 배점표는 고려대처럼 등급별 환산점수가 있을 때만.
+      </div>
+      <div className="row">
+        <button className="btn sm primary" onClick={save}>저장</button>
+        <button className="btn sm ghost" onClick={onCancel}>취소</button>
       </div>
     </div>
   )
