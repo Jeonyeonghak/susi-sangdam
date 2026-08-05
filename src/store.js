@@ -175,6 +175,7 @@ export async function addPick(studentId, adm){
     student_id: studentId, admission_id: adm.id,
     univ: adm.univ, dept: adm.dept, type: adm.type, name: adm.name,
     cut26: adm.cut26 ?? null, comp26: adm.comp26 ?? null,
+    cut25: adm.cut25 ?? null, comp25: adm.comp25 ?? null, quota: adm.quota ?? null,
     minreq: adm.minreq ?? null, examdate: adm.examdate ?? null,
     judgment: '적정', slot: '', status: '관심', reason: '', sort_order: 0,
   }
