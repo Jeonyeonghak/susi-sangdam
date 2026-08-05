@@ -95,28 +95,64 @@ export default function App(){
 function TeacherPicker({ teachers, teacherId, setTeacherId, setTeachers, flash }){
   const [adding, setAdding] = useState(false)
   const [name, setName] = useState('')
+  const [editing, setEditing] = useState(false)
+  const [editName, setEditName] = useState('')
   const add = async ()=>{
     if(!name.trim()) return
     const t = await db.addTeacher(name.trim())
     setTeachers(await db.listTeachers()); setTeacherId(t.id); setName(''); setAdding(false)
     flash('담임 추가됨')
   }
+  const startEdit = ()=>{
+    const cur = teachers.find(t=>t.id===teacherId)
+    if(!cur) return
+    setEditName(cur.name); setEditing(true)
+  }
+  const saveEdit = async ()=>{
+    if(!editName.trim()) return
+    await db.updateTeacher(teacherId, editName.trim())
+    setTeachers(await db.listTeachers()); setEditing(false); flash('담임 이름 수정됨')
+  }
+  const removeTeacher = async ()=>{
+    const cur = teachers.find(t=>t.id===teacherId)
+    if(!cur) return
+    if(!confirm(`담임 "${cur.name}"을(를) 삭제할까요?\n소속 학생은 삭제되지 않고 '전체'에 남습니다.`)) return
+    await db.deleteTeacher(teacherId)
+    setTeachers(await db.listTeachers()); setTeacherId(''); flash('담임 삭제됨')
+  }
   return (
     <div className="teacher-pick">
       <span className="muted" style={{fontSize:12}}>담임</span>
-      <select value={teacherId} onChange={e=>setTeacherId(e.target.value)}>
-        <option value="">전체</option>
-        {teachers.map(t=> <option key={t.id} value={t.id}>{t.name}</option>)}
-      </select>
-      {adding ? (
+      {editing ? (
         <>
-          <input className="inp" style={{width:110}} placeholder="이름" value={name}
-            onChange={e=>setName(e.target.value)} onKeyDown={e=>e.key==='Enter'&&add()} />
-          <button className="btn sm primary" onClick={add}>추가</button>
-          <button className="btn sm ghost" onClick={()=>setAdding(false)}>취소</button>
+          <input className="inp" style={{width:110}} value={editName}
+            onChange={e=>setEditName(e.target.value)} onKeyDown={e=>e.key==='Enter'&&saveEdit()} />
+          <button className="btn sm primary" onClick={saveEdit}>저장</button>
+          <button className="btn sm ghost" onClick={()=>setEditing(false)}>취소</button>
         </>
       ) : (
-        <button className="btn sm" onClick={()=>setAdding(true)}>+ 담임</button>
+        <>
+          <select value={teacherId} onChange={e=>setTeacherId(e.target.value)}>
+            <option value="">전체</option>
+            {teachers.map(t=> <option key={t.id} value={t.id}>{t.name}</option>)}
+          </select>
+          {teacherId && !adding && (
+            <>
+              <button className="btn sm ghost" onClick={startEdit} title="담임 이름 수정">✎</button>
+              <button className="btn sm ghost danger" onClick={removeTeacher} title="담임 삭제">✕</button>
+            </>
+          )}
+          {adding ? (
+            <>
+              <input className="inp" style={{width:110}} placeholder="이름" value={name}
+                onChange={e=>setName(e.target.value)} onKeyDown={e=>e.key==='Enter'&&add()} />
+              <button className="btn sm primary" onClick={add}>추가</button>
+              <button className="btn sm ghost" onClick={()=>setAdding(false)}>취소</button>
+            </>
+          ) : (
+            <button className="btn sm" onClick={()=>setAdding(true)}>+ 담임</button>
+          )}
+        </>
       )}
     </div>
   )
