@@ -204,3 +204,8 @@ export async function saveStudentGrades(id, grades, narratives){
   const all=LS.get('students', [])
   LS.set('students', all.map(s=> s.id===id ? { ...s, ...patch } : s))
 }
+
+export async function deleteGuide(univ){
+  if(isConfigured){ await supabase.from('수시모집요강').delete().eq('univ', univ); return }
+  const all=LS.get('guides', {}); delete all[univ]; LS.set('guides', all)
+}
