@@ -138,6 +138,15 @@ export function parseSubjectGroups(subjects){
 
 // 대학명 퍼지 매칭
 function norm(s){ return String(s||'').replace(/\s/g,'').replace(/(학교|대학교|대학)$/,'') }
+// 파일명 대학명 → 통통통 DB 정식명 매칭 (가천대 → 가천대학교)
+export function matchUnivName(input, dbUnivs){
+  if(!input || !dbUnivs || !dbUnivs.length) return null
+  const n=norm(input)
+  const exact=dbUnivs.find(u=>u===input); if(exact) return exact
+  const ne=dbUnivs.find(u=>norm(u)===n); if(ne) return ne
+  const contains=dbUnivs.find(u=>{ const nu=norm(u); return nu.includes(n)||n.includes(nu) }); if(contains) return contains
+  return null
+}
 export function findGuideForUni(uniGuides, rowUni){
   if(!uniGuides || !rowUni) return null
   const nRow=norm(rowUni)
