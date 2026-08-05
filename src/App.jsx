@@ -839,7 +839,8 @@ function GuidesTab({ guides, reloadGuides, flash }){
                   <div key={i} style={{padding:'3px 0',borderTop:i?'1px dashed var(--line)':undefined}}>
                     <b>{t.trackName}</b> <span className="muted">[{t.trackType}]</span>
                     {t.subjectGroups?.length ? ` · 반영: ${t.subjectGroups.join('·')}` : ' · 반영과목 없음(전체평균)'}
-                    {t.topN ? ` · 상위${t.topN}` : ''}
+                    {t.topN ? ` · 상위${t.topN}과목` : ''}
+                    {t.scoreTable ? ' · 배점표✓' : ''}
                     {t.jinroHandling ? ` · 진로: ${t.jinroHandling}` : ''}
                   </div>
                 ))}
