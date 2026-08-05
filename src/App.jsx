@@ -426,7 +426,11 @@ function SearchTab({ student, guides, flash }){
       <div className="pane pane-right" style={{borderRight:'1px solid var(--line)'}}>
         <div className="card">
           <div className="row" style={{justifyContent:'space-between',alignItems:'center'}}>
-            <h3 style={{margin:0}}>입결 필터 · <span className="muted">{student.name} (내신 {fmt(student.gpa)} / {fmt(student.track)})</span></h3>
+            <h3 style={{margin:0}}>입결 필터 · <span className="muted">{student.name} (내신 {fmt(student.gpa)} / {fmt(student.track)})</span>
+              {student.grades?.length
+                ? <span className="j-badge j-안정" style={{marginLeft:8}}>생기부 {student.grades.length}과목 · 전체평균 {(eng.calcOverallAvg(student.grades)??0).toFixed(2)}</span>
+                : <span className="j-badge j-도전" style={{marginLeft:8}}>생기부 미등록 — 교과등급 계산 불가</span>}
+            </h3>
             {loading && <span className="muted" style={{fontSize:12}}>불러오는 중…</span>}
           </div>
           <div className="filters" style={{marginTop:12}}>
@@ -499,7 +503,10 @@ function SearchTab({ student, guides, flash }){
                       <td>{a.type}</td>
                       <td>{a.name}</td>
                       <td className="num">{fmt(a.quota)}</td>
-                      <td className="num" title={src||''}>{myGrade!=null ? myGrade.toFixed(2) : '–'}</td>
+                      <td className="num" title={src||''}>
+                        {myGrade!=null ? myGrade.toFixed(2) : '–'}
+                        {src && <div style={{fontSize:10,color:'var(--sub)',fontWeight:400}}>{src}</div>}
+                      </td>
                       <td className="num">{fmt(a.cut26)}</td>
                       <td className="num">{fmt(a.cut25)}</td>
                       <td className="num">{fmt(a.comp26)}</td>
