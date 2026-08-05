@@ -188,6 +188,9 @@ export function gradeForRow(row, grades, uniGuides){
     if(guide){
       const gt=findGuideTrack(guide,row)
       if(gt) return calcGradeAvg(grades, gt.subjectGroups?.length?gt.subjectGroups:null, gt.jinroHandling||null)
+      // track 매칭 실패 → 그 대학 교과전형 중 반영과목이 있는 첫 track 사용
+      const anyTrack=(guide.tracks||[]).find(t=>t.subjectGroups?.length)
+      if(anyTrack) return calcGradeAvg(grades, anyTrack.subjectGroups, anyTrack.jinroHandling||null)
     }
     const groups=parseSubjectGroups(row.subjects)
     return calcGradeAvg(grades, groups, null)
@@ -201,7 +204,12 @@ export function gradeSource(row, grades, uniGuides){
   if(tt.includes('종합')||tt.includes('논술')) return '전체평균'
   if(tt.includes('교과')){
     const guide=findGuideForUni(uniGuides, row.univ)
-    if(guide){ const gt=findGuideTrack(guide,row); if(gt) return `📐${gt.trackName||'요강'}` }
+    if(guide){
+      const gt=findGuideTrack(guide,row)
+      if(gt) return `📐${gt.trackName||'요강'}`
+      const anyTrack=(guide.tracks||[]).find(t=>t.subjectGroups?.length)
+      if(anyTrack) return `📐${row.univ} 요강`
+    }
     return 'DB근사'
   }
   return '전체평균'
