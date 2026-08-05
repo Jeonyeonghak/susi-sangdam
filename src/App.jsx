@@ -6,9 +6,10 @@ const JUDGMENTS = ['안정','적정','도전','상향']
 const STATUSES  = ['관심','지원확정','보류','제외']
 const fmt = v => (v===null||v===undefined||v==='') ? '–' : v
 
+// 학생 등급 대비 컷 등급으로 안정/적정/도전/상향 자동 제안
 function suggestJudgment(gpa, cut){
   if(gpa==null || cut==null) return null
-  const d = cut - gpa
+  const d = cut - gpa // (+)면 컷이 학생보다 낮은 성적 = 여유
   if(d >= 0.4) return '안정'
   if(d >= -0.1) return '적정'
   if(d >= -0.5) return '도전'
@@ -82,6 +83,7 @@ export default function App(){
   )
 }
 
+/* ---------------- 담임 선택 ---------------- */
 function TeacherPicker({ teachers, teacherId, setTeacherId, setTeachers, flash }){
   const [adding, setAdding] = useState(false)
   const [name, setName] = useState('')
@@ -112,6 +114,7 @@ function TeacherPicker({ teachers, teacherId, setTeacherId, setTeachers, flash }
   )
 }
 
+/* ---------------- ① 학생 로우데이터 ---------------- */
 function StudentsTab({ students, teacherId, selStudent, setSelStudent, refresh, flash, goSearch }){
   const [form, setForm] = useState(blankStudent())
   const [csv, setCsv] = useState('')
@@ -327,6 +330,7 @@ function StudentDetail({ student, onSaved, flash, setSelStudent }){
   )
 }
 
+/* ---------------- ② 관심학과 담기 (입결 검색) ---------------- */
 function SearchTab({ student, flash }){
   const [q, setQ] = useState({ univ:'', dept:'', region:'', type:'', track: student.track||'' })
   const [rows, setRows] = useState([])
@@ -334,9 +338,15 @@ function SearchTab({ student, flash }){
   const [picks, setPicks] = useState([])
   const [regions, setRegions] = useState([])
   const [types, setTypes] = useState([])
+  const [univs, setUnivs] = useState([])
+  const [depts, setDepts] = useState([])
   const [onlyReachable, setOnlyReachable] = useState(false)
 
   useEffect(()=>{ db.distinctRegions().then(setRegions); db.distinctTypes().then(setTypes) }, [])
+  useEffect(()=>{ db.distinctUnivs(q.region).then(setUnivs) }, [q.region])
+  useEffect(()=>{
+    if(q.univ){ db.distinctDepts(q.univ, q.track).then(setDepts) } else setDepts([])
+  }, [q.univ, q.track])
   useEffect(()=>{ db.listPicks(student.id).then(setPicks) }, [student.id])
 
   const hasFilter = Boolean(q.univ.trim() || q.dept.trim() || q.region || q.type)
@@ -350,7 +360,7 @@ function SearchTab({ student, flash }){
         gpaMax: onlyReachable ? (student.gpa ?? undefined) : undefined,
       })
       setRows(res); setLoading(false)
-    }, 400)
+    }, 300)
     return ()=> clearTimeout(t)
   }, [q.univ, q.dept, q.region, q.type, q.track, onlyReachable, hasFilter, student.gpa])
 
@@ -372,22 +382,36 @@ function SearchTab({ student, flash }){
             {loading && <span className="muted" style={{fontSize:12}}>불러오는 중…</span>}
           </div>
           <div className="filters" style={{marginTop:12}}>
-            <input className="inp" placeholder="대학명" value={q.univ}
-              onChange={e=>setQ({...q,univ:e.target.value})} />
-            <input className="inp" placeholder="학과/모집단위" value={q.dept}
-              onChange={e=>setQ({...q,dept:e.target.value})} />
-            <select className="inp" value={q.region} onChange={e=>setQ({...q,region:e.target.value})}>
+            <select className="inp" value={q.region}
+              onChange={e=>setQ({...q, region:e.target.value, univ:'', dept:''})}>
               <option value="">지역 전체</option>
               {regions.map(r=> <option key={r} value={r}>{r}</option>)}
             </select>
+
             <select className="inp" value={q.type} onChange={e=>setQ({...q,type:e.target.value})}>
               <option value="">전형유형 전체</option>
               {types.map(t=> <option key={t} value={t}>{t}</option>)}
             </select>
-            <select className="inp" value={q.track} onChange={e=>setQ({...q,track:e.target.value})}>
+
+            <select className="inp" value={q.track}
+              onChange={e=>setQ({...q, track:e.target.value, dept:''})}>
               <option value="">계열 전체</option>
               <option value="자연">자연</option><option value="인문">인문</option><option value="통합">통합</option>
             </select>
+
+            <input className="inp" list="univ-list" placeholder={`대학 선택/검색 (${univs.length})`}
+              value={q.univ} onChange={e=>setQ({...q, univ:e.target.value, dept:''})} style={{minWidth:170}} />
+            <datalist id="univ-list">
+              {univs.map(u=> <option key={u} value={u} />)}
+            </datalist>
+
+            <input className="inp" list="dept-list"
+              placeholder={q.univ ? `학과 선택 (${depts.length})` : '학과/모집단위 검색'}
+              value={q.dept} onChange={e=>setQ({...q, dept:e.target.value})} style={{minWidth:170}} />
+            <datalist id="dept-list">
+              {depts.map(d=> <option key={d} value={d} />)}
+            </datalist>
+
             <label className="row" style={{alignItems:'center',gap:4,fontSize:12,color:'var(--sub)'}}>
               <input type="checkbox" checked={onlyReachable} onChange={e=>setOnlyReachable(e.target.checked)} />
               내신 이내만
@@ -404,7 +428,7 @@ function SearchTab({ student, flash }){
               </tr></thead>
               <tbody>
                 {!hasFilter && (
-                  <tr><td colSpan={14} className="empty">위에서 대학명·학과·지역·전형유형 중 하나라도 입력/선택하면 해당하는 입결이 여기 바로 나옵니다. 어떤 대학이 있는지 모르면 지역이나 전형유형부터 골라 보세요.</td></tr>
+                  <tr><td colSpan={14} className="empty">위 필터를 골라 보세요. 지역을 고르면 그 지역 대학만, 대학을 고르면 그 대학 학과만 목록에 뜹니다. 대학·학과 칸은 클릭하면 목록이 펼쳐지고, 글자를 치면 걸러집니다. 학과명만으로도 검색됩니다.</td></tr>
                 )}
                 {hasFilter && rows.length===0 && !loading && (
                   <tr><td colSpan={14} className="empty">조건에 맞는 입결이 없습니다. 필터를 넓혀 보세요.</td></tr>
@@ -493,6 +517,7 @@ function PickBoard({ student, picks, setPicks, flash }){
   )
 }
 
+/* ---------------- ③ 최종 지원 보고서 (인쇄) ---------------- */
 function ReportTab({ student, teacherName }){
   const [picks, setPicks] = useState([])
   useEffect(()=>{ db.listPicks(student.id).then(setPicks) }, [student.id])
@@ -573,10 +598,12 @@ function ReportTab({ student, teacherName }){
   )
 }
 
+/* ---------------- utils ---------------- */
 function num(v){ if(v===''||v===null||v===undefined) return null; const n=Number(v); return Number.isNaN(n)?null:n }
 function parseCsv(text, teacherId){
   const lines = text.trim().split(/\r?\n/).filter(Boolean)
   if(!lines.length) return []
+  // 첫 줄이 헤더(이름 포함)면 스킵
   const first = lines[0]
   const hasHeader = /이름|name/i.test(first) && /(내신|출신|계열|모의)/.test(first)
   const body = hasHeader ? lines.slice(1) : lines
