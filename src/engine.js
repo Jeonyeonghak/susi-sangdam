@@ -93,21 +93,6 @@ function ocrPagesToText(pages){
     return `[${i+1}페이지]\n${blocks.filter(Boolean).join('\n\n')}`
   }).join('\n\n')
 }
-async function fullOcr(file, onProg){
-  const isPdf=/\.pdf$/i.test(file?.name||'') || String(file?.type||'').includes('pdf')
-  let documentRef
-  if(isPdf){
-    onProg?.('PDF 업로드 중…'); const id=await uploadFile(file)
-    onProg?.('OCR 주소 발급 중…'); const url=await signedUrl(id)
-    documentRef={type:'document_url',document_url:url}
-  }else{
-    const dataUrl=await fileToDataUrl(file); documentRef={type:'image_url',image_url:dataUrl}
-  }
-  onProg?.('생기부 OCR 분석 중…')
-  const result=await callOCR({ model:'mistral-ocr-latest', document:documentRef, include_image_base64:false, table_format:'html' },{onRetry:onProg})
-  return ocrPagesToText(result.pages||[])
-}
-
 // ============================================================
 // 교과 계산 (그대로 이식)
 // ============================================================
@@ -342,10 +327,78 @@ function normalizeGrades(raw){
   }).filter(g=>g.subject)
 }
 
+async function fullOcrDoc(file, onProg){
+  const isPdf=/\.pdf$/i.test(file?.name||'') || String(file?.type||'').includes('pdf')
+  if(isPdf){
+    onProg?.('PDF 업로드 중…'); const id=await uploadFile(file)
+    onProg?.('OCR 주소 발급 중…'); const url=await signedUrl(id)
+    return { isPdf:true, ref:{type:'document_url',document_url:url} }
+  }
+  const dataUrl=await fileToDataUrl(file)
+  return { isPdf:false, ref:{type:'image_url',image_url:dataUrl} }
+}
+async function fullOcr(file, onProg){
+  const { ref }=await fullOcrDoc(file, onProg)
+  onProg?.('생기부 OCR 분석 중…')
+  const result=await callOCR({ model:'mistral-ocr-latest', document:ref, include_image_base64:false, table_format:'html' },{onRetry:onProg})
+  return ocrPagesToText(result.pages||[])
+}
+
+// Mistral 구조화 스키마 (표를 칸 단위로 정확히 뽑게 함 — 정확도 핵심)
+function gradeSchema(){
+  return { type:'json_schema', json_schema:{ name:'grade_rows', schema:{ type:'object', additionalProperties:false,
+    properties:{ studentName:{type:['string','null']}, schoolName:{type:['string','null']}, grades:{ type:'array', items:{ type:'object', additionalProperties:false,
+      properties:{ year:{type:['integer','null']}, semester:{type:['integer','null']}, group:{type:['string','null']}, subject:{type:['string','null']},
+        unit:{type:['integer','null']}, rawScore:{type:['number','null']}, avg:{type:['number','null']}, stdev:{type:['number','null']},
+        achievement:{type:['string','null']}, cohort:{type:['integer','null']}, grade:{type:['integer','null']}, courseType:{type:['string','null']}, pageNo:{type:['integer','null']}, rowOrder:{type:['integer','null']} },
+      required:['year','semester','group','subject','unit','rawScore','avg','stdev','achievement','cohort','grade','courseType','pageNo','rowOrder'] } } },
+    required:['grades','studentName','schoolName'] } } }
+}
+function gradePrompt(){
+  return `You are extracting course rows from a Korean high school transcript.
+Read the entire document and return ALL visible course rows in their original top-to-bottom order.
+Return ONLY a JSON object:
+{"grades":[{"year":1,"semester":1,"group":"국어","subject":"문학","unit":4,"rawScore":94,"avg":68.8,"stdev":16.0,"achievement":"A","cohort":344,"grade":1,"courseType":"공통","pageNo":1,"rowOrder":1}],"studentName":"","schoolName":""}
+Rules:
+- Extract every visible course row in top-to-bottom order, exactly as they appear in the PDF.
+- The "year" of each row must match the "[N학년]" header above that table. Do NOT guess year from narrative or "1학년 때 배운" recall.
+- If the document only shows [1학년] and [2학년] headers, do NOT create year=3 rows.
+- Never merge adjacent rows. The same semester and group can contain multiple different subjects.
+- If semester or group cells are merged and blank on a lower row, inherit the previous visible value in the same table.
+- pageNo is the original PDF page number. rowOrder is 1,2,3... within each page top to bottom.
+- courseType: "공통" for year-1 regular subjects (석차등급 있음), "일반" for year-2/3 regular subjects (석차등급 있음), "진로" for 진로선택 (no 석차등급, has 성취도별 분포비율), "체육예술" for 체육·예술.
+- The same subject name may appear in BOTH a regular table AND a 진로 table — keep BOTH with different courseType.
+- grade must be 1~9 only when actually visible. 진로/체육예술 rows have grade=null.
+- Use null for any field that is not visible. Do not invent years, subjects, scores, or extra rows.`
+}
+
 // ============================================================
-// AI: 생기부 PDF → 성적 배열 (원본 파이프라인)
+// AI: 생기부 PDF → 성적 배열
+// (1순위: 구조화 annotation OCR / 실패 시 텍스트 청크 방식)
 // ============================================================
 export async function extractGradesFromPdf(file, onProg){
+  // ── 1순위: 구조화 annotation (원본 정확도 방식) ──
+  try{
+    const { ref }=await fullOcrDoc(file, onProg)
+    onProg?.('생기부 표 구조화 분석 중…')
+    const annRes=await callOCR({
+      model:'mistral-ocr-latest', document:ref, include_image_base64:false, table_format:'html',
+      document_annotation_format:gradeSchema(), document_annotation_prompt:gradePrompt(),
+    },{onRetry:onProg})
+    let ann=annRes.document_annotation
+    if(typeof ann==='string') ann=safeJson(ann)
+    const rows=(ann?.grades||[]).map((g,i)=>{
+      const pageNo=Number(g.pageNo)||1, rowOrder=Number(g.rowOrder)||i+1
+      const y=Number(g.year)||null
+      return { ...g, year:y, displayOrder:buildAbsoluteDisplayOrder(y||0,pageNo,rowOrder) }
+    })
+    if(rows.length){
+      const cleaned=normalizeGrades(dedupeGradeRows(rows))
+      return cleaned.map(g=>({ ...g, term:g.semester }))
+    }
+  }catch(e){ onProg?.('구조화 실패 → 텍스트 방식으로 재시도… ('+(e?.message||e)+')') }
+
+  // ── 2순위: 텍스트 청크 방식 fallback ──
   const text=await fullOcr(file, onProg)
   if(!text.trim()) throw new Error('OCR 텍스트가 비었습니다')
   const explicitYears=getConfirmedYears(text)
@@ -362,9 +415,7 @@ export async function extractGradesFromPdf(file, onProg){
 - 일반/공통은 grade 1~9, 진로/체육예술은 grade=null
 - 진로는 courseType="진로", 체육/음악/미술은 courseType="체육예술"
 - 1학년 일반교과는 courseType="공통", 2~3학년 일반교과는 courseType="일반"
-- 숫자는 텍스트 그대로 사용, 없으면 null
-- pageNo는 [N페이지]의 N, rowOrder는 그 페이지 안에서 위→아래 순서
-- 없는 과목/학년/점수는 지어내지 말 것
+- 숫자는 텍스트 그대로 사용, 없으면 null. 없는 과목/학년/점수는 지어내지 말 것
 ---
 ${pageText}`
 
@@ -383,9 +434,7 @@ ${pageText}`
       }))
     }
   }
-  const deduped=dedupeGradeRows(rows)
-  let cleaned=normalizeGrades(deduped)
+  let cleaned=normalizeGrades(dedupeGradeRows(rows))
   if(explicitYears.length) cleaned=cleaned.filter(g=>explicitYears.includes(g.year))
-  // calc 엔진 호환: group 필드 유지, semester→term 별칭
   return cleaned.map(g=>({ ...g, term:g.semester }))
 }
