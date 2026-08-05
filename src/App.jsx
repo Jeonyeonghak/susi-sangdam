@@ -732,12 +732,23 @@ function GuidesTab({ guides, reloadGuides, flash }){
   const upload = async (files)=>{
     if(!files || !files.length) return
     if(!eng.hasAI){ flash('AI 키가 없습니다 (Vercel 환경변수 VITE_MISTRAL_KEY)'); return }
+    // 파일명에서 대학명 추출: "가천대2.jpg" → "가천대" (뒤 숫자·공백 제거)
+    const rawName = String(files[0].name||'')
+      .replace(/\.[^.]+$/,'')          // 확장자 제거
+      .replace(/[\s_-]*\d+\s*$/,'')    // 끝의 숫자(1,2,3) 제거
+      .trim()
+    if(!rawName){ flash('파일 이름을 대학명으로 저장하세요 (예: 가천대.jpg)'); return }
     try{
+      setBusy('대학명 확인 중…')
+      // 통통통 DB 정식명에 매칭 (가천대 → 가천대학교)
+      const dbUnivs = await db.distinctUnivs()
+      const matched = eng.matchUnivName(rawName, dbUnivs)
       const g = await eng.parseGuideFromImages([...files], msg=>setBusy(msg))
-      if(!g.university){ flash('대학명을 못 읽었습니다. 표지/모집단위 페이지를 포함해 주세요'); return }
-      await db.saveGuide(g.university, g)
+      const univName = matched || rawName  // 매칭 실패 시 파일명 그대로
+      g.university = univName
+      await db.saveGuide(univName, g)
       await reloadGuides()
-      flash(`${g.university} 모집요강 등록 (전형 ${g.tracks.length}개) · 전체 공유됨`)
+      flash(`${univName} 모집요강 등록 (전형 ${g.tracks.length}개) · 전체 공유됨`)
     }catch(err){ flash('분석 실패: '+(err?.message||err)) }
     finally{ setBusy('') }
   }
