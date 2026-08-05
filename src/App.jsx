@@ -139,10 +139,11 @@ function StudentsTab({ students, teacherId, selStudent, setSelStudent, refresh, 
     const rec = {
       teacher_id: teacherId, name: form.name.trim(), school: form.school || null,
       grade: form.grade || null, track: form.track || null,
-      gpa: num(form.gpa), gpa_main: num(form.gpa_main),
-      mock: form.mock || null, target: form.target || null, memo: form.memo || null,
+      gpa: num(form.gpa), target: form.target || null, memo: form.memo || null,
     }
-    await db.addStudent(rec); setForm(blankStudent()); await refresh(); flash('학생 저장됨')
+    const saved = await db.addStudent(rec); setForm(blankStudent()); await refresh()
+    if(saved) setSelStudent(saved)
+    flash('학생 저장됨 · 이제 생기부를 올려 성적을 채우세요')
   }
 
   const importCsv = async ()=>{
@@ -219,17 +220,14 @@ function StudentsTab({ students, teacherId, selStudent, setSelStudent, refresh, 
                   <option>자연</option><option>인문</option><option>통합</option>
                 </select></label>
               <label className="field grow"><span>내신(전과목)</span>
-                <input className="inp" value={form.gpa} onChange={e=>set('gpa',e.target.value)} placeholder="1.85" /></label>
-              <label className="field grow"><span>주요교과</span>
-                <input className="inp" value={form.gpa_main} onChange={e=>set('gpa_main',e.target.value)} placeholder="1.60" /></label>
+                <input className="inp" value={form.gpa} onChange={e=>set('gpa',e.target.value)} placeholder="생기부 올리면 자동" /></label>
             </div>
-            <label className="field"><span>모의고사 성적 요약</span>
-              <input className="inp" value={form.mock} onChange={e=>set('mock',e.target.value)} placeholder="국2 수3 영2 탐3/3" /></label>
             <label className="field"><span>희망 진로 / 학과 방향</span>
               <input className="inp" value={form.target} onChange={e=>set('target',e.target.value)} placeholder="항공우주 · 데이터/AI" /></label>
             <label className="field"><span>상담 메모</span>
               <textarea className="inp" value={form.memo} onChange={e=>set('memo',e.target.value)} /></label>
             <button className="btn primary" onClick={save}>학생 저장</button>
+            <div className="muted" style={{fontSize:12,marginTop:8}}>학생을 저장하면 생기부 PDF를 올릴 수 있고, 성적·내신이 자동으로 채워집니다.</div>
           </div>
         )}
       </div>
@@ -299,7 +297,7 @@ function StudentDetail({ student, onSaved, flash, setSelStudent }){
   const save = async ()=>{
     const patch = {
       name:f.name, school:f.school, grade:f.grade, track:f.track,
-      gpa:num(f.gpa), gpa_main:num(f.gpa_main), mock:f.mock, target:f.target, memo:f.memo,
+      gpa:num(f.gpa), target:f.target, memo:f.memo,
     }
     await db.updateStudent(student.id, patch)
     setSelStudent({ ...student, ...patch }); await onSaved(); flash('저장됨')
@@ -319,13 +317,9 @@ function StudentDetail({ student, onSaved, flash, setSelStudent }){
           <select className="inp" value={f.track||'자연'} onChange={e=>set('track',e.target.value)}>
             <option>자연</option><option>인문</option><option>통합</option>
           </select></label>
-        <label className="field grow"><span>내신</span>
+        <label className="field grow"><span>내신 {f.grades?.length ? '(생기부 자동)' : ''}</span>
           <input className="inp" value={f.gpa??''} onChange={e=>set('gpa',e.target.value)} /></label>
-        <label className="field grow"><span>주요교과</span>
-          <input className="inp" value={f.gpa_main??''} onChange={e=>set('gpa_main',e.target.value)} /></label>
       </div>
-      <label className="field"><span>모의고사</span>
-        <input className="inp" value={f.mock||''} onChange={e=>set('mock',e.target.value)} /></label>
       <label className="field"><span>희망 진로</span>
         <input className="inp" value={f.target||''} onChange={e=>set('target',e.target.value)} /></label>
       <label className="field"><span>메모</span>
@@ -342,34 +336,104 @@ function StudentDetail({ student, onSaved, flash, setSelStudent }){
 
 function GradebookUploader({ student, onSaved, setSelStudent, flash }){
   const [busy, setBusy] = useState('')
-  const gradeCount = student.grades?.length || 0
+  const grades = student.grades || []
+  const overall = grades.length ? eng.calcOverallAvg(grades) : null
+  const sci = grades.length ? eng.calcGradeAvg(grades,['국어','수학','영어','과학'],null) : null
+  const hum = grades.length ? eng.calcGradeAvg(grades,['국어','수학','영어','사회'],null) : null
+
+  // 성적 저장 + 내신(전과목 평균) 자동 반영
+  const persist = async (newGrades)=>{
+    const gpa = eng.calcOverallAvg(newGrades)
+    await db.saveStudentGrades(student.id, newGrades)
+    if(gpa!=null) await db.updateStudent(student.id, { gpa: Math.round(gpa*100)/100 })
+    setSelStudent({ ...student, grades:newGrades, gpa: gpa!=null?Math.round(gpa*100)/100:student.gpa })
+    await onSaved()
+  }
+
   const upload = async (file)=>{
     if(!file) return
     if(!eng.hasAI){ flash('AI 키가 없습니다 (Vercel 환경변수 VITE_MISTRAL_KEY)'); return }
     try{
-      const grades = await eng.extractGradesFromPdf(file, msg=>setBusy(msg))
-      await db.saveStudentGrades(student.id, grades)
-      const overall = eng.calcOverallAvg(grades)
-      setSelStudent({ ...student, grades })
-      await onSaved()
-      flash(`성적 ${grades.length}과목 추출 · 전체평균 ${overall!=null?overall.toFixed(2):'–'}`)
+      const g = await eng.extractGradesFromPdf(file, msg=>setBusy(msg))
+      if(!g.length){ flash('성적을 읽지 못했습니다. PDF 화질/범위를 확인하세요'); return }
+      await persist(g)
+      const ov = eng.calcOverallAvg(g)
+      flash(`성적 ${g.length}과목 · 전체평균 ${ov!=null?ov.toFixed(2):'–'} — 아래 표에서 확인/수정하세요`)
     }catch(err){ flash('추출 실패: '+(err?.message||err)) }
     finally{ setBusy('') }
   }
+
+  const updateRow = async (id, field, val)=>{
+    const numFields=['unit','rawScore','grade','avg','stdev']
+    const parsed = val==='' ? null : (numFields.includes(field) ? Number(val) : val)
+    const ng = grades.map(x=> x.id===id ? { ...x, [field]: (numFields.includes(field) && Number.isNaN(parsed)) ? null : parsed } : x)
+    await persist(ng)
+  }
+  const deleteRow = async (id)=>{
+    const g = grades.find(x=>x.id===id)
+    if(!confirm(`"${g?.subject}" 행을 삭제할까요?`)) return
+    await persist(grades.filter(x=>x.id!==id))
+  }
+
   return (
     <div style={{marginTop:14,borderTop:'1px solid var(--line)',paddingTop:12}}>
-      <div style={{fontSize:12,fontWeight:700,color:'var(--sub)',marginBottom:6}}>
-        생기부 성적 {gradeCount>0 ? `· ${gradeCount}과목 등록됨 (전체평균 ${(eng.calcOverallAvg(student.grades)??0).toFixed(2)})` : '· 미등록'}
+      <div className="row" style={{justifyContent:'space-between',alignItems:'center'}}>
+        <div style={{fontSize:12,fontWeight:700,color:'var(--sub)'}}>
+          생기부 성적 {grades.length>0 ? `· ${grades.length}과목` : '· 미등록'}
+        </div>
+        {grades.length>0 && (
+          <div style={{fontSize:12,display:'flex',gap:14}}>
+            <span className="muted">전체 <b style={{color:'var(--ink)'}}>{overall?.toFixed(2)??'–'}</b></span>
+            <span className="muted">이과(국수영과) <b style={{color:'var(--ink)'}}>{sci?.toFixed(2)??'–'}</b></span>
+            <span className="muted">문과(국수영사) <b style={{color:'var(--ink)'}}>{hum?.toFixed(2)??'–'}</b></span>
+          </div>
+        )}
       </div>
-      {busy && <div className="muted" style={{fontSize:12,marginBottom:6}}>{busy}</div>}
-      <label className="btn sm" style={{display:'inline-block'}}>
-        생기부 PDF 업로드
-        <input type="file" accept="application/pdf,image/*" style={{display:'none'}}
-          onChange={e=>upload(e.target.files?.[0])} />
-      </label>
-      <div className="muted" style={{fontSize:11,marginTop:6}}>
-        PDF를 올리면 AI가 교과 성적을 자동으로 읽어 저장합니다. 이후 관심학과 담기에서 대학별 교과등급이 자동 계산됩니다.
+      {busy && <div className="banner" style={{marginTop:8}}>{busy}</div>}
+      <div style={{marginTop:8}}>
+        <label className="btn sm" style={{display:'inline-block'}}>
+          {grades.length>0 ? '생기부 다시 올리기' : '생기부 PDF 업로드'}
+          <input type="file" accept="application/pdf,image/*" style={{display:'none'}}
+            onChange={e=>upload(e.target.files?.[0])} />
+        </label>
+        {!eng.hasAI && <span className="muted" style={{marginLeft:8,fontSize:11}}>※ AI 키 미설정</span>}
       </div>
+
+      {grades.length>0 && (
+        <>
+          <div className="muted" style={{fontSize:11,margin:'10px 0 4px'}}>
+            AI가 읽은 성적입니다. 틀린 등급·유형·단위가 있으면 셀을 고치세요(입력 후 다른 곳 클릭). 내신·교과등급이 자동 재계산됩니다.
+            <br/>유형: <b>공통/일반</b>=석차등급 있는 교과 · <b>진로</b>=성취도 A/B/C · <b>체육예술</b>=계산 제외
+          </div>
+          <div className="tablewrap" style={{maxHeight:360}}>
+            <table style={{fontSize:12}}>
+              <thead><tr>
+                <th>학년</th><th>교과</th><th>과목</th><th>유형</th>
+                <th className="num">단위</th><th className="num">등급</th><th>성취</th><th></th>
+              </tr></thead>
+              <tbody>
+                {grades.map(g=>(
+                  <tr key={g.id} style={g.courseType==='체육예술'?{opacity:.5}:undefined}>
+                    <td>{g.year}-{g.semester||g.term||''}</td>
+                    <td>{g.group}</td>
+                    <td>{g.subject}</td>
+                    <td>
+                      <select defaultValue={g.courseType||'일반'} onChange={e=>updateRow(g.id,'courseType',e.target.value)}
+                        style={{padding:'2px 4px',border:'1px solid var(--line)',borderRadius:4}}>
+                        <option>공통</option><option>일반</option><option>진로</option><option>체육예술</option>
+                      </select>
+                    </td>
+                    <td className="num"><input defaultValue={g.unit??''} onBlur={e=>updateRow(g.id,'unit',e.target.value)} style={{width:36,textAlign:'right',border:'1px solid var(--line)',borderRadius:4,padding:'2px'}} /></td>
+                    <td className="num"><input defaultValue={g.grade??''} onBlur={e=>updateRow(g.id,'grade',e.target.value)} style={{width:36,textAlign:'right',border:'1px solid var(--line)',borderRadius:4,padding:'2px'}} /></td>
+                    <td><input defaultValue={g.achievement??''} onBlur={e=>updateRow(g.id,'achievement',e.target.value)} style={{width:34,border:'1px solid var(--line)',borderRadius:4,padding:'2px'}} /></td>
+                    <td><button className="btn sm ghost danger" onClick={()=>deleteRow(g.id)}>✕</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
     </div>
   )
 }
