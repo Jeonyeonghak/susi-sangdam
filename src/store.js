@@ -1,11 +1,17 @@
 import { supabase, isConfigured } from './supabase'
 
+// ------------------------------------------------------------------
+// 데이터 레이어. Supabase가 설정돼 있으면 실서비스, 아니면 localStorage
+// (설정 전에도 UI를 바로 시험해볼 수 있게 하는 폴백입니다).
+// ------------------------------------------------------------------
+
 const LS = {
   get(k, d){ try{ return JSON.parse(localStorage.getItem(k)) ?? d }catch{ return d } },
   set(k, v){ localStorage.setItem(k, JSON.stringify(v)) },
 }
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()+Math.random()))
 
+// ---------- Teachers ----------
 export async function listTeachers(){
   if(isConfigured){
     const { data } = await supabase.from('수시담임').select('*').order('created_at')
@@ -22,6 +28,7 @@ export async function addTeacher(name){
   const all = LS.get('teachers', []); all.push(t); LS.set('teachers', all); return t
 }
 
+// ---------- Students ----------
 export async function listStudents(teacherId){
   if(isConfigured){
     let q = supabase.from('수시학생들').select('*').order('created_at')
@@ -61,6 +68,7 @@ export async function deleteStudent(id){
   LS.set('picks', LS.get('picks', []).filter(p => p.student_id !== id))
 }
 
+// ---------- Admissions (입결 검색) ----------
 export async function searchAdmissions({ univ, dept, region, type, track, gpaMax, limit=300 }){
   if(isConfigured){
     let q = supabase.from('수시입결').select('*')
@@ -69,11 +77,12 @@ export async function searchAdmissions({ univ, dept, region, type, track, gpaMax
     if(region) q = q.eq('region', region)
     if(type)   q = q.eq('type', type)
     if(track)  q = q.eq('track', track)
-    if(gpaMax) q = q.gte('cut26', gpaMax)
+    if(gpaMax) q = q.gte('cut26', gpaMax) // 컷 등급이 학생 등급보다 큰(=낮은 성적도 붙는) 곳
     q = q.order('cut26', { ascending: true, nullsFirst: false }).limit(limit)
     const { data } = await q
     return data || []
   }
+  // 폴백: 로컬 데모 데이터 (public/admissions_sample.json)
   const sample = await fetch('/admissions_sample.json').then(r=>r.json()).catch(()=>[])
   return sample.filter(a => {
     if(univ && !String(a.univ||'').includes(univ)) return false
@@ -86,6 +95,7 @@ export async function searchAdmissions({ univ, dept, region, type, track, gpaMax
 }
 export async function distinctRegions(){
   if(isConfigured){
+    // 전체에서 지역 목록 (중복 제거는 클라이언트에서)
     const { data } = await supabase.from('수시입결').select('region').limit(30000)
     return [...new Set((data||[]).map(d=>d.region).filter(Boolean))].sort()
   }
@@ -98,7 +108,31 @@ export async function distinctTypes(){
   }
   return ['학생부종합','학생부교과','논술','실기/실적']
 }
+// 전체 대학 목록 (지역으로 좁힐 수 있음)
+export async function distinctUnivs(region){
+  if(isConfigured){
+    let q = supabase.from('수시입결').select('univ,region').limit(30000)
+    if(region) q = q.eq('region', region)
+    const { data } = await q
+    return [...new Set((data||[]).map(d=>d.univ).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ko'))
+  }
+  const sample = await fetch('/admissions_sample.json').then(r=>r.json()).catch(()=>[])
+  return [...new Set(sample.filter(a=>!region||a.region===region).map(a=>a.univ).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ko'))
+}
+// 특정 대학의 학과(모집단위) 목록
+export async function distinctDepts(univ, track){
+  if(!univ) return []
+  if(isConfigured){
+    let q = supabase.from('수시입결').select('dept,track').eq('univ', univ).limit(30000)
+    if(track) q = q.eq('track', track)
+    const { data } = await q
+    return [...new Set((data||[]).map(d=>d.dept).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ko'))
+  }
+  const sample = await fetch('/admissions_sample.json').then(r=>r.json()).catch(()=>[])
+  return [...new Set(sample.filter(a=>a.univ===univ && (!track||a.track===track)).map(a=>a.dept).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ko'))
+}
 
+// ---------- Picks (관심학과 담기 → 최종 지원) ----------
 export async function listPicks(studentId){
   if(isConfigured){
     const { data } = await supabase.from('수시담기').select('*')
