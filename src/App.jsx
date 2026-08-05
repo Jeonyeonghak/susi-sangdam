@@ -684,6 +684,11 @@ function ReportTab({ student, teacherName, guides }){
   const [picks, setPicks] = useState([])
   useEffect(()=>{ db.listPicks(student.id).then(setPicks) }, [student.id])
 
+  const setJudgment = async (id, judgment)=>{
+    await db.updatePick(id, { judgment })
+    setPicks(picks.map(p=> p.id===id ? { ...p, judgment } : p))
+  }
+
   const active = picks.filter(p=> p.status!=='제외')
   const confirmed = active.filter(p=> p.status==='지원확정')
   const order = { 안정:0, 적정:1, 도전:2, 상향:3 }
@@ -703,7 +708,7 @@ function ReportTab({ student, teacherName, guides }){
             <h1>{student.name} 수시 지원 상담 보고서</h1>
             <div className="rp-sub">
               {[student.school, student.grade, student.track && `${student.track}계열`].filter(Boolean).join(' · ')}
-              {student.gpa!=null && ` · 내신 ${student.gpa}`}{student.gpa_main!=null && ` (주요교과 ${student.gpa_main})`}
+              {student.gpa!=null && ` · 내신 ${student.gpa}`}
             </div>
             {student.target && <div className="rp-sub">희망 진로: {student.target}</div>}
           </div>
@@ -723,27 +728,36 @@ function ReportTab({ student, teacherName, guides }){
           <h2>지원(예정) 학과 상세</h2>
           <table>
             <thead><tr>
-              <th>슬롯</th><th>판정</th><th>상태</th><th>대학</th><th>모집단위</th>
-              <th>전형유형</th><th>전형명</th><th>26컷</th><th>경쟁률</th><th>최저학력기준</th><th>고사일</th><th>사유</th>
+              <th>슬롯</th><th>판정</th><th>대학</th><th>모집단위</th>
+              <th>전형유형</th><th>전형명</th><th className="num">인원</th>
+              <th className="num">26컷</th><th className="num">26경쟁</th>
+              <th className="num">25컷</th><th className="num">25경쟁</th>
+              <th>최저학력기준</th><th>고사일</th>
             </tr></thead>
             <tbody>
               {sorted.map(p=>(
                 <tr key={p.id}>
                   <td>{fmt(p.slot)}</td>
-                  <td><span className={`j-badge j-${p.judgment}`}>{p.judgment}</span></td>
-                  <td>{p.status}</td>
+                  <td>
+                    <select className="rp-judge no-print-border" value={p.judgment||'적정'}
+                      onChange={e=>setJudgment(p.id, e.target.value)}>
+                      {JUDGMENTS.map(j=> <option key={j}>{j}</option>)}
+                    </select>
+                  </td>
                   <td><b>{p.univ}</b></td>
                   <td>{p.dept}</td>
                   <td>{p.type}</td>
                   <td>{p.name}</td>
+                  <td className="num">{fmt(p.quota)}</td>
                   <td className="num">{fmt(p.cut26)}</td>
                   <td className="num">{fmt(p.comp26)}</td>
+                  <td className="num">{fmt(p.cut25)}</td>
+                  <td className="num">{fmt(p.comp25)}</td>
                   <td>{fmt(p.minreq)}</td>
                   <td>{fmt(p.examdate)}</td>
-                  <td>{fmt(p.reason)}</td>
                 </tr>
               ))}
-              {sorted.length===0 && <tr><td colSpan={12} className="empty">담긴 학과가 없습니다.</td></tr>}
+              {sorted.length===0 && <tr><td colSpan={13} className="empty">담긴 학과가 없습니다.</td></tr>}
             </tbody>
           </table>
         </div>
