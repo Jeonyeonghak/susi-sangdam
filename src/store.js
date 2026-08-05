@@ -178,3 +178,29 @@ export async function deletePick(id){
   if(isConfigured){ await supabase.from('수시담기').delete().eq('id', id); return }
   LS.set('picks', LS.get('picks', []).filter(p => p.id !== id))
 }
+
+// ---------- 모집요강 규칙 (전체 공유) ----------
+export async function loadGuides(){
+  if(isConfigured){
+    const { data } = await supabase.from('수시모집요강').select('univ,guide')
+    const map={}; (data||[]).forEach(r=>{ map[r.univ]=r.guide }); return map
+  }
+  return LS.get('guides', {})
+}
+export async function saveGuide(univ, guide){
+  if(isConfigured){
+    await supabase.from('수시모집요강').upsert({ univ, guide, updated_at:new Date().toISOString() }, { onConflict:'univ' })
+    return
+  }
+  const all=LS.get('guides', {}); all[univ]=guide; LS.set('guides', all)
+}
+
+// ---------- 학생 성적/서술 저장 ----------
+export async function saveStudentGrades(id, grades, narratives){
+  const patch={}
+  if(grades!==undefined) patch.grades=grades
+  if(narratives!==undefined) patch.narratives=narratives
+  if(isConfigured){ await supabase.from('수시학생들').update(patch).eq('id', id); return }
+  const all=LS.get('students', [])
+  LS.set('students', all.map(s=> s.id===id ? { ...s, ...patch } : s))
+}
