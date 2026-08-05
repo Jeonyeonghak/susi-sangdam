@@ -27,6 +27,21 @@ export async function addTeacher(name){
   const t = { id: uid(), name, created_at: new Date().toISOString() }
   const all = LS.get('teachers', []); all.push(t); LS.set('teachers', all); return t
 }
+export async function updateTeacher(id, name){
+  if(isConfigured){ await supabase.from('수시담임').update({ name }).eq('id', id); return }
+  const all = LS.get('teachers', []); LS.set('teachers', all.map(t=> t.id===id ? { ...t, name } : t))
+}
+export async function deleteTeacher(id){
+  if(isConfigured){
+    // 담임 삭제 시 소속 학생의 teacher_id는 null로 (학생 자체는 보존)
+    await supabase.from('수시학생들').update({ teacher_id: null }).eq('teacher_id', id)
+    await supabase.from('수시담임').delete().eq('id', id)
+    return
+  }
+  const students = LS.get('students', []).map(s=> s.teacher_id===id ? { ...s, teacher_id:null } : s)
+  LS.set('students', students)
+  LS.set('teachers', LS.get('teachers', []).filter(t=> t.id!==id))
+}
 
 // ---------- Students ----------
 export async function listStudents(teacherId){
