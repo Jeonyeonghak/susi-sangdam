@@ -17,7 +17,36 @@ function suggestJudgment(gpa, cut){
   return '상향'
 }
 
+const APP_PASSWORD = '55555'
+
 export default function App(){
+  const [ok, setOk] = useState(()=> sessionStorage.getItem('auth')==='1')
+  const [pw, setPw] = useState('')
+  const [err, setErr] = useState(false)
+
+  if(ok) return <AppInner />
+
+  const submit = ()=>{
+    if(pw===APP_PASSWORD){ sessionStorage.setItem('auth','1'); setOk(true) }
+    else { setErr(true); setPw('') }
+  }
+  return (
+    <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'#eef0f3'}}>
+      <div className="card" style={{width:320,textAlign:'center'}}>
+        <div style={{fontWeight:800,fontSize:18,marginBottom:4}}>대입 지원 상담</div>
+        <div className="muted" style={{fontSize:13,marginBottom:16}}>강남한국학원 · DnA입시LAB</div>
+        <input className="inp" type="password" placeholder="비밀번호" value={pw}
+          onChange={e=>{setPw(e.target.value); setErr(false)}}
+          onKeyDown={e=>e.key==='Enter'&&submit()} autoFocus
+          style={{textAlign:'center',fontSize:16,letterSpacing:2}} />
+        {err && <div style={{color:'#c0392b',fontSize:12,marginTop:6}}>비밀번호가 올바르지 않습니다</div>}
+        <button className="btn primary" style={{width:'100%',marginTop:12}} onClick={submit}>입장</button>
+      </div>
+    </div>
+  )
+}
+
+function AppInner(){
   const [tab, setTab] = useState('students')
   const [teachers, setTeachers] = useState([])
   const [teacherId, setTeacherId] = useState(localStorage.getItem('teacherId') || '')
