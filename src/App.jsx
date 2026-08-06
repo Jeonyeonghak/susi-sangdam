@@ -922,48 +922,75 @@ function TrackEditor({ track, onSave, onCancel }){
   const [scoreStr, setScoreStr] = useState(
     track.scoreTable ? Object.entries(track.scoreTable).map(([g,s])=>`${g}:${s}`).join(', ') : ''
   )
+  const [weightStr, setWeightStr] = useState(
+    track.weights ? Object.entries(track.weights).map(([k,v])=>`${k}:${v}`).join(', ') : ''
+  )
+  const [rawStr, setRawStr] = useState(
+    track.rawBands ? track.rawBands.map(b=>`${b.min}:${b.score}`).join(', ') : ''
+  )
+  const [mathRawStr, setMathRawStr] = useState(
+    track.subjectRawBands?.수학 ? track.subjectRawBands.수학.map(b=>`${b.min}:${b.score}`).join(', ') : ''
+  )
+  const [jinroScoreStr, setJinroScoreStr] = useState(
+    track.jinroScore ? Object.entries(track.jinroScore).map(([k,v])=>`${k}:${v}`).join(', ') : ''
+  )
+  const parseTable = (str)=>{ // "1:100, 2:96" → {1:100,...}
+    if(!str.trim()) return null
+    const o={}; for(const p of str.split(/[,\n]/)){ const m=p.match(/([^\s:：]+)\s*[:：]\s*([\d.]+)/); if(m) o[m[1].trim()]=Number(m[2]) }
+    return Object.keys(o).length?o:null
+  }
+  const parseBands = (str)=>{ // "90:1000, 85:960" → [{min:90,score:1000},...]
+    if(!str.trim()) return null
+    const arr=[]; for(const p of str.split(/[,\n]/)){ const m=p.match(/([\d.]+)\s*[:：]\s*([\d.]+)/); if(m) arr.push({min:Number(m[1]),score:Number(m[2])}) }
+    return arr.length?arr:null
+  }
   const save = ()=>{
     const subjectGroups = subj.split(/[,\s·]+/).map(s=>s.trim()).filter(Boolean)
-    let scoreTable = null
-    if(scoreStr.trim()){
-      scoreTable = {}
-      for(const part of scoreStr.split(/[,\n]/)){
-        const m = part.match(/(\d)\s*[:：]\s*([\d.]+)/)
-        if(m) scoreTable[Number(m[1])] = Number(m[2])
-      }
-      if(!Object.keys(scoreTable).length) scoreTable = null
-    }
+    const mathBands = parseBands(mathRawStr)
     onSave({
       subjectGroups,
       track: trk || null,
       topN: topN==='' ? null : Number(topN),
       jinroHandling: jinro.trim() || null,
-      scoreTable,
+      scoreTable: parseTable(scoreStr),
+      weights: parseTable(weightStr),
+      rawBands: parseBands(rawStr),
+      subjectRawBands: mathBands ? { 수학: mathBands } : null,
+      jinroScore: parseTable(jinroScoreStr),
     })
   }
   return (
     <div style={{background:'#fafbfc',border:'1px solid var(--line)',borderRadius:8,padding:10}}>
       <div style={{fontWeight:700,marginBottom:6}}>{track.trackName} <span className="muted">[{track.trackType}]</span></div>
       <div className="row">
-        <label className="field grow"><span>반영교과 (쉼표 구분, 예: 국어,수학,영어,과학)</span>
+        <label className="field grow"><span>반영교과 (쉼표 구분)</span>
           <input className="inp" value={subj} onChange={e=>setSubj(e.target.value)} placeholder="국어,수학,영어,과학" /></label>
         <label className="field"><span>계열</span>
           <select className="inp" value={trk} onChange={e=>setTrk(e.target.value)}>
-            <option value="">공통(구분없음)</option>
-            <option value="자연">자연</option>
-            <option value="인문">인문</option>
+            <option value="">공통</option><option value="자연">자연</option><option value="인문">인문</option>
           </select></label>
+        <label className="field"><span>상위 N</span>
+          <input className="inp" value={topN} onChange={e=>setTopN(e.target.value)} placeholder="10" style={{width:60}} /></label>
       </div>
-      <div className="row">
-        <label className="field grow"><span>상위 N과목 (전과목이면 빈칸)</span>
-          <input className="inp" value={topN} onChange={e=>setTopN(e.target.value)} placeholder="예: 10" /></label>
-        <label className="field grow"><span>진로선택 처리</span>
-          <input className="inp" value={jinro} onChange={e=>setJinro(e.target.value)} placeholder="미반영 또는 A:1등급,B:3등급,C:5등급" /></label>
+      <label className="field"><span>진로선택 처리 (등급환산)</span>
+        <input className="inp" value={jinro} onChange={e=>setJinro(e.target.value)} placeholder="미반영 또는 A:1등급,B:3등급,C:5등급" /></label>
+      <label className="field"><span>과목별 반영비율 (가중치, 예: 국어:30, 수학:40, 영어:20, 사회:10)</span>
+        <input className="inp" value={weightStr} onChange={e=>setWeightStr(e.target.value)} placeholder="국어:30, 수학:40, 영어:20, 과학:10" /></label>
+      <label className="field"><span>등급 배점표 (등급:점수) — 고려대식</span>
+        <input className="inp" value={scoreStr} onChange={e=>setScoreStr(e.target.value)} placeholder="1:100, 2:99.5, 3:99, ..." /></label>
+
+      <div style={{borderTop:'1px dashed var(--line)',margin:'10px 0',paddingTop:8}}>
+        <div style={{fontSize:12,fontWeight:700,color:'var(--sub)',marginBottom:6}}>원점수 구간 배점 (외대식) — 있을 때만 입력</div>
+        <label className="field"><span>공통 원점수배점 (원점수최소:점수)</span>
+          <input className="inp" value={rawStr} onChange={e=>setRawStr(e.target.value)} placeholder="90:1000, 85:960, 80:890, 75:770, 70:600, 60:400, 50:230, 40:110, 0:0" /></label>
+        <label className="field"><span>수학 별도 원점수배점 (없으면 빈칸)</span>
+          <input className="inp" value={mathRawStr} onChange={e=>setMathRawStr(e.target.value)} placeholder="90:1000, 80:960, 70:890, 60:770, 50:600, 40:400, 30:230, 20:110, 0:0" /></label>
+        <label className="field"><span>진로 원점수배점 (성취도:점수)</span>
+          <input className="inp" value={jinroScoreStr} onChange={e=>setJinroScoreStr(e.target.value)} placeholder="A:1000, B:960, C:890" /></label>
       </div>
-      <label className="field"><span>배점표 (등급:점수, 없으면 빈칸)</span>
-        <input className="inp" value={scoreStr} onChange={e=>setScoreStr(e.target.value)} placeholder="1:100, 2:99.5, 3:99, 4:98.5, 5:98, 6:97.5, 7:85, 8:60, 9:30" /></label>
+
       <div className="muted" style={{fontSize:11,marginBottom:8}}>
-        계열: 자연=국수영과, 인문=국수영사가 보통. 학생 계열에 맞는 track이 자동 선택됩니다. 종합·논술이면 반영교과를 비우세요(전체평균).
+        대부분 대학은 위쪽(반영교과·상위N·진로)만 채우면 됩니다. 배점표·가중치·원점수배점은 그 대학이 실제로 쓸 때만. 원점수배점을 넣으면 그게 최우선 적용됩니다.
       </div>
       <div className="row">
         <button className="btn sm primary" onClick={save}>저장</button>
