@@ -230,18 +230,39 @@ function findGuideTrack(guide, row){
   return null
 }
 
-// track 선택: "그 모집단위(행)의 계열"을 최우선으로.
-// 인문 학과 → 인문 track, 자연 학과 → 자연 track.
-// 계열이 맞는 track이 없으면 null 반환 → 통통통 반영과목(DB근사)으로 빠짐.
+// 모집단위/전형명에서 세부계열 키워드 추출
+function fieldKeywords(text){
+  const s=String(text||'')
+  const keys=[]
+  if(/의예|의학과|의과/.test(s)) keys.push('의예')
+  if(/한의/.test(s)) keys.push('한의')
+  if(/치의|치예|치과/.test(s)) keys.push('치의')
+  if(/약학|약대/.test(s)) keys.push('약학')
+  if(/수의/.test(s)) keys.push('수의')
+  if(/간호/.test(s)) keys.push('간호')
+  if(/예체능|체육|미술|음악|디자인|무용|실기/.test(s)) keys.push('예체능')
+  return keys
+}
+
+// track 선택: 세부계열 키워드 → 자연/인문 순으로 그 모집단위에 맞는 track을 찾는다.
+// 맞는 track이 없으면 null → 통통통 반영과목(DB근사)으로.
 function pickTrackForRow(guide, row, studentTrack){
   const tracks=(guide.tracks||[]).filter(t=>t.subjectGroups?.length)
   if(!tracks.length) return null
 
+  const rowText = `${row.dept||''} ${row.name||''} ${row.track||''}`
+  // 1) 세부계열 키워드 매칭 (의예/한의/약학/예체능 등)
+  const rowKeys = fieldKeywords(rowText)
+  for(const k of rowKeys){
+    const t = tracks.find(t=> fieldKeywords(t.trackName).includes(k))
+    if(t) return t
+  }
+
+  // 2) 자연/인문 계열 매칭
   const natTrack = tracks.find(t=>t.track==='자연')
   const humTrack = tracks.find(t=>t.track==='인문')
   const commonTrack = tracks.find(t=>!t.track||t.track==='공통')
 
-  // 이 모집단위의 계열 판정 (행 계열 우선, 없으면 학생 계열)
   const rowField = String(row.track||'')
   const rowNat = /자연|이과/.test(rowField)
   const rowHum = /인문|문과/.test(rowField)
@@ -251,19 +272,19 @@ function pickTrackForRow(guide, row, studentTrack){
   const wantNat = rowNat || (!rowHum && stuNat)
   const wantHum = rowHum || (!rowNat && stuHum)
 
-  // 이 모집단위가 인문 → 인문 track. 없으면 공통. 그것도 없으면 null(DB근사)
+  // 예체능 모집단위인데 예체능 track이 없으면 DB근사로 (자연/인문으로 잘못 계산 방지)
+  if(rowKeys.includes('예체능')) return commonTrack || null
+
   if(wantHum){
     if(humTrack) return humTrack
     if(commonTrack) return commonTrack
-    return null // 인문학과인데 인문/공통 track이 없음 → 자연으로 잘못 계산 방지
+    return null
   }
-  // 이 모집단위가 자연 → 자연 track. 없으면 공통. 그것도 없으면 null
   if(wantNat){
     if(natTrack) return natTrack
     if(commonTrack) return commonTrack
     return null
   }
-  // 계열 판단 불가: 공통 → 전형명 매칭 → 유일 track
   if(commonTrack) return commonTrack
   const gt=findGuideTrack(guide,row)
   if(gt && gt.subjectGroups?.length) return gt
