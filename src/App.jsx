@@ -879,6 +879,13 @@ function GuideCard({ univ, guide, reloadGuides, flash }){
     await db.saveGuide(univ, { ...guide, tracks:newTracks })
     await reloadGuides(); setEditIdx(-1); flash('수정 저장됨 · 전체 공유')
   }
+  const deleteTrack = async (idx)=>{
+    const t=tracks[idx]
+    if(!confirm(`"${t.trackName||'이 전형'}"을(를) 삭제할까요?`)) return
+    const newTracks = tracks.filter((_,i)=> i!==idx)
+    await db.saveGuide(univ, { ...guide, tracks:newTracks })
+    await reloadGuides(); setEditIdx(-1); flash('전형 삭제됨')
+  }
 
   return (
     <div style={{borderBottom:'1px solid var(--line)',padding:'8px 0'}}>
@@ -903,7 +910,10 @@ function GuideCard({ univ, guide, reloadGuides, flash }){
                   {t.scoreTable ? ' · 배점표✓' : ''}
                   {t.jinroHandling ? ` · 진로: ${t.jinroHandling}` : ''}
                 </div>
-                <button className="btn sm ghost" onClick={()=>setEditIdx(i)}>수정</button>
+                <div style={{display:'flex',gap:4,flexShrink:0}}>
+                  <button className="btn sm ghost" onClick={()=>setEditIdx(i)}>수정</button>
+                  <button className="btn sm ghost danger" onClick={()=>deleteTrack(i)}>삭제</button>
+                </div>
               </div>
             )}
           </div>
@@ -915,6 +925,7 @@ function GuideCard({ univ, guide, reloadGuides, flash }){
 }
 
 function TrackEditor({ track, onSave, onCancel }){
+  const [name, setName] = useState(track.trackName||'')
   const [subj, setSubj] = useState((track.subjectGroups||[]).join(','))
   const [topN, setTopN] = useState(track.topN||'')
   const [jinro, setJinro] = useState(track.jinroHandling||'')
@@ -948,6 +959,7 @@ function TrackEditor({ track, onSave, onCancel }){
     const subjectGroups = subj.split(/[,\s·]+/).map(s=>s.trim()).filter(Boolean)
     const mathBands = parseBands(mathRawStr)
     onSave({
+      trackName: name.trim() || track.trackName,
       subjectGroups,
       track: trk || null,
       topN: topN==='' ? null : Number(topN),
@@ -961,7 +973,8 @@ function TrackEditor({ track, onSave, onCancel }){
   }
   return (
     <div style={{background:'#fafbfc',border:'1px solid var(--line)',borderRadius:8,padding:10}}>
-      <div style={{fontWeight:700,marginBottom:6}}>{track.trackName} <span className="muted">[{track.trackType}]</span></div>
+      <label className="field"><span>전형명</span>
+        <input className="inp" value={name} onChange={e=>setName(e.target.value)} placeholder="예: 학생부교과(추천형)" /></label>
       <div className="row">
         <label className="field grow"><span>반영교과 (쉼표 구분)</span>
           <input className="inp" value={subj} onChange={e=>setSubj(e.target.value)} placeholder="국어,수학,영어,과학" /></label>
