@@ -616,7 +616,7 @@ function SearchTab({ student, guides, flash }){
                 )}
                 {rows.map(a=>{
                   // 학생 성적이 있으면 이 대학·전형 방식으로 교과등급 계산
-                  const rowForCalc = { univ:a.univ, type:a.type, name:a.name, subjects:a.subjects, track:a.track }
+                  const rowForCalc = { univ:a.univ, type:a.type, name:a.name, subjects:a.subjects, track:a.track, dept:a.dept }
                   const myGrade = student.grades ? eng.gradeForRow(rowForCalc, student.grades, guides, student.track) : null
                   const src = student.grades ? eng.gradeSource(rowForCalc, student.grades, guides, student.track) : null
                   // 판정: 계산된 내 교과등급 우선, 없으면 입력한 내신
@@ -766,7 +766,7 @@ function ReportTab({ student, teacherName, guides }){
             </tr></thead>
             <tbody>
               {sorted.map(p=>{
-                const rowForCalc = { univ:p.univ, type:p.type, name:p.name, subjects:p.subjects, track:p.track }
+                const rowForCalc = { univ:p.univ, type:p.type, name:p.name, subjects:p.subjects, track:p.track, dept:p.dept }
                 const myGrade = student.grades ? eng.gradeForRow(rowForCalc, student.grades, guides, student.track) : null
                 return (
                   <tr key={p.id}>
