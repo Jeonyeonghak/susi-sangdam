@@ -173,7 +173,7 @@ export async function listPicks(studentId){
 export async function addPick(studentId, adm){
   const snap = {
     student_id: studentId, admission_id: adm.id,
-    univ: adm.univ, dept: adm.dept, type: adm.type, name: adm.name,
+    univ: adm.univ, dept: adm.dept, type: adm.type, name: adm.name, track: adm.track ?? null,
     cut26: adm.cut26 ?? null, comp26: adm.comp26 ?? null,
     cut25: adm.cut25 ?? null, comp25: adm.comp25 ?? null, quota: adm.quota ?? null,
     minreq: adm.minreq ?? null, examdate: adm.examdate ?? null,
