@@ -230,16 +230,41 @@ function findGuideTrack(guide, row){
   return null
 }
 
+// 계열(자연/인문)에 맞는 track 우선 선택
+function pickTrackForRow(guide, row, studentTrack){
+  const tracks=(guide.tracks||[]).filter(t=>t.subjectGroups?.length)
+  if(!tracks.length) return null
+  // 학생/모집단위 계열 (자연 or 인문)
+  const want = studentTrack || row.track || ''
+  const wantNat = /자연|이과|자연계/.test(want)
+  const wantHum = /인문|문과|인문계/.test(want)
+  // 1) 전형명 매칭 먼저
+  const gt=findGuideTrack(guide,row)
+  if(gt && gt.subjectGroups?.length){
+    // 전형명이 맞아도 계열이 어긋나면 계열 우선 보정
+    if(wantNat && gt.track==='인문'){}
+    else if(wantHum && gt.track==='자연'){}
+    else return gt
+  }
+  // 2) 계열로 선택
+  if(wantNat){ const t=tracks.find(t=>t.track==='자연'); if(t) return t }
+  if(wantHum){ const t=tracks.find(t=>t.track==='인문'); if(t) return t }
+  // 3) 계열 표시 없는 공통 track
+  const common=tracks.find(t=>!t.track||t.track==='공통')
+  if(common) return common
+  // 4) 그래도 없으면 전형명 매칭 결과나 첫 track
+  return gt || tracks[0]
+}
+
 // 한 지원행(대학·전형)에 대해 학생 교과등급 계산
-export function gradeForRow(row, grades, uniGuides){
+export function gradeForRow(row, grades, uniGuides, studentTrack){
   if(!grades || !grades.length) return null
   const tt=row.type||''
   if(tt.includes('종합') || tt.includes('논술')) return calcOverallAvg(grades)
   if(tt.includes('교과')){
     const guide=findGuideForUni(uniGuides, row.univ)
     if(guide){
-      const gt=findGuideTrack(guide,row)
-      const useTrack = gt || (guide.tracks||[]).find(t=>t.subjectGroups?.length)
+      const useTrack = pickTrackForRow(guide, row, studentTrack)
       if(useTrack){
         return calcGradeAvg(
           grades,
@@ -255,17 +280,15 @@ export function gradeForRow(row, grades, uniGuides){
   return calcOverallAvg(grades)
 }
 // 계산 근거 라벨
-export function gradeSource(row, grades, uniGuides){
+export function gradeSource(row, grades, uniGuides, studentTrack){
   if(!grades || !grades.length) return null
   const tt=row.type||''
   if(tt.includes('종합')||tt.includes('논술')) return '전체평균'
   if(tt.includes('교과')){
     const guide=findGuideForUni(uniGuides, row.univ)
     if(guide){
-      const gt=findGuideTrack(guide,row)
-      if(gt) return `📐${gt.trackName||'요강'}`
-      const anyTrack=(guide.tracks||[]).find(t=>t.subjectGroups?.length)
-      if(anyTrack) return `📐${row.univ} 요강`
+      const t=pickTrackForRow(guide, row, studentTrack)
+      if(t) return `📐${t.trackName||row.univ+' 요강'}`
     }
     return 'DB근사'
   }
@@ -278,18 +301,24 @@ export function gradeSource(row, grades, uniGuides){
 export async function parseGuideFromImages(files, onProg){
   const imgs=[]
   for(const f of files){ imgs.push(await fileToDataUrl(f)) }
-  const prompt=`These images are pages from a Korean university admission guide (교과전형 계산 방법). Extract as JSON.
+  const prompt=`These images are pages from a Korean university admission guide (교과전형 반영방법/계산방법). Extract as JSON.
 Return ONLY this JSON shape:
-{"university":"대학명(한글)","tracks":[{"trackName":"전형명 정확히(모집요강 그대로)","trackType":"교과" or "종합","subjectGroups":["국어","수학","영어","과학"],"jinroHandling":"미반영" or "A:1등급,B:3등급,C:5등급" or null,"topN":null or number,"scoreTable":null or {"1":100,"2":96,"3":92,"4":86,"5":70,"6":55,"7":40,"8":20,"9":0},"cutoffNote":"자유문자열" or null,"evalAreas":["학업역량","진로역량"]}],"changeNotes":[]}
-중요 규칙:
-- subjectGroups: 반영교과. "국어·수학·영어·과학" 처럼 반영하는 교과만. 계열별로 다르면 각 track으로 분리.
-- topN: "우수한 10개 과목", "상위 10과목" 처럼 상위 N개만 반영하면 그 숫자. 전과목이면 null.
-- scoreTable: "등급별 반영점수" 또는 "변환등급 배점" 표가 있으면 {등급:점수}로. 예: 1등급 100, 2등급 96... 없으면 null.
-- jinroHandling: 진로선택과목 처리. "반영하지 않음"이면 "미반영". "A는 1등급, B는 3등급"처럼 환산하면 "A:1등급,B:3등급,C:5등급".
-- trackName은 모집요강의 정식 명칭 그대로. 종합전형은 subjectGroups=[], scoreTable=null.
-- 불명확하면 null. 절대 추측하지 말 것. 특히 반영교과 개수를 지어내지 말 것("4개 중 3개" 같은 표현 금지 — 실제 교과명만).`
+{"university":"대학명(한글)","tracks":[{"trackName":"전형명(계열 포함, 예: 학생부우수자-자연계열)","trackType":"교과" or "종합","track":"자연" or "인문" or "공통" or null,"subjectGroups":["국어","수학","영어","과학"],"jinroHandling":"미반영" or "A:1등급,B:3등급,C:5등급" or null,"topN":null or number,"scoreTable":null or {"1":100,"2":99.5,"3":99},"cutoffNote":null,"evalAreas":[]}],"changeNotes":[]}
+
+핵심 규칙 — 계열 구분을 반드시 지킬 것:
+- 모집요강에 "인문계열", "자연계열", "의예/약학" 처럼 계열별로 반영교과나 배점이 다르게 나오면, 각 계열을 **반드시 별도 track으로 분리**해서 각각 만들 것. 절대 하나로 합치지 말 것.
+  예) 인문계열 → track:"인문", subjectGroups:["국어","수학","영어","사회"]
+      자연계열 → track:"자연", subjectGroups:["국어","수학","영어","과학"]
+- trackName에 계열을 포함 (예: "일반전형-인문계열", "일반전형-자연계열").
+- 같은 전형이라도 계열마다 배점표(scoreTable)가 다르면 각각 정확히 읽을 것.
+- subjectGroups: 실제 반영교과명만. 인문은 보통 국어·수학·영어·사회, 자연은 국어·수학·영어·과학.
+- topN: "우수한 10개 과목", "상위 10과목"이면 그 숫자. 전과목이면 null.
+- scoreTable: "변환등급 배점" 또는 "등급별 반영점수" 표가 있으면 {등급:점수}로 정확히. 계열마다 다르면 각 track에 각각.
+- jinroHandling: "진로선택과목 반영하지 않음"이면 "미반영". 환산하면 "A:1등급,B:3등급,C:5등급".
+- 종합전형은 subjectGroups=[], scoreTable=null, track 지정 안 함.
+- 반영교과 개수를 지어내지 말 것("4개 중 3개" 같은 표현 절대 금지). 불명확하면 null.`
   onProg?.('모집요강 분석 중…')
-  const resp=await callOAI([{role:'user',content:[{type:'text',text:prompt},...visionContent(imgs)]}],{maxTokens:3000})
+  const resp=await callOAI([{role:'user',content:[{type:'text',text:prompt},...visionContent(imgs)]}],{maxTokens:4000})
   const raw=safeJson(resp)
   const out={ university:String(raw?.university||'').trim(), tracks:[], changeNotes:Array.isArray(raw?.changeNotes)?raw.changeNotes.map(String).filter(Boolean):[] }
   for(const t of (Array.isArray(raw?.tracks)?raw.tracks:[])){
@@ -298,7 +327,6 @@ Return ONLY this JSON shape:
     if(Array.isArray(t.subjectGroups)) for(const s of t.subjectGroups){ if(typeof s==='string'&&s.trim()) subjectGroups.push(s.trim()) }
     let evalAreas=[]
     if(Array.isArray(t.evalAreas)) for(const a of t.evalAreas){ if(typeof a==='string'&&a.trim()) evalAreas.push(a.trim()); else if(a?.name) evalAreas.push(String(a.name).trim()) }
-    // scoreTable 정규화: {등급:점수} 숫자만
     let scoreTable=null
     if(t.scoreTable && typeof t.scoreTable==='object' && !Array.isArray(t.scoreTable)){
       scoreTable={}
@@ -308,9 +336,11 @@ Return ONLY this JSON shape:
       }
       if(!Object.keys(scoreTable).length) scoreTable=null
     }
+    const trk=['자연','인문','공통'].includes(t.track)?t.track:null
     out.tracks.push({
       trackName:String(t.trackName||'').trim(),
       trackType:(t.trackType==='교과'||t.trackType==='종합')?t.trackType:(subjectGroups.length?'교과':'종합'),
+      track:trk,
       subjectGroups,
       jinroHandling:t.jinroHandling?String(t.jinroHandling).trim():null,
       topN:Number.isFinite(Number(t.topN))&&Number(t.topN)>0?Number(t.topN):null,
