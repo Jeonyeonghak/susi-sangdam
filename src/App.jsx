@@ -854,6 +854,27 @@ function GuidesTab({ guides, reloadGuides, flash }){
           </label>
           {!eng.hasAI && <span className="muted" style={{marginLeft:10,fontSize:12}}>※ AI 키 미설정 — Vercel 환경변수 VITE_MISTRAL_KEY 필요</span>}
         </div>
+
+        <div style={{marginTop:14,borderTop:'1px solid var(--line)',paddingTop:12}}>
+          <div style={{fontSize:12,fontWeight:700,color:'var(--sub)',marginBottom:8}}>
+            이미 등록된 대학 {names.length}곳 {names.length>0 && '— 클릭하면 아래에서 열립니다'}
+          </div>
+          {names.length===0 ? (
+            <div className="muted" style={{fontSize:13}}>아직 없습니다. 여러 명이 나눠 올리면 여기에 쌓입니다.</div>
+          ) : (
+            <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+              {names.map(u=>(
+                <button key={u} onClick={()=>{
+                  const el=document.getElementById('guide-'+u)
+                  if(el){ el.scrollIntoView({behavior:'smooth',block:'center'}); el.style.transition='background .3s'; el.style.background='#fff7e6'; setTimeout(()=>{el.style.background=''},1200) }
+                }} style={{
+                  border:'1px solid var(--line)',borderRadius:14,padding:'4px 12px',fontSize:13,
+                  background:'#f4f6f8',cursor:'pointer',whiteSpace:'nowrap'
+                }}>{u}</button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="card" style={{maxWidth:820}}>
@@ -888,7 +909,7 @@ function GuideCard({ univ, guide, reloadGuides, flash }){
   }
 
   return (
-    <div style={{borderBottom:'1px solid var(--line)',padding:'8px 0'}}>
+    <div id={'guide-'+univ} style={{borderBottom:'1px solid var(--line)',padding:'8px 0'}}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
         <div style={{fontWeight:700}}>{univ}</div>
         <button className="btn sm ghost danger" onClick={async()=>{
