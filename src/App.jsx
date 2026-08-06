@@ -588,8 +588,8 @@ function SearchTab({ student, guides, flash }){
                 {rows.map(a=>{
                   // 학생 성적이 있으면 이 대학·전형 방식으로 교과등급 계산
                   const rowForCalc = { univ:a.univ, type:a.type, name:a.name, subjects:a.subjects }
-                  const myGrade = student.grades ? eng.gradeForRow(rowForCalc, student.grades, guides) : null
-                  const src = student.grades ? eng.gradeSource(rowForCalc, student.grades, guides) : null
+                  const myGrade = student.grades ? eng.gradeForRow(rowForCalc, student.grades, guides, student.track) : null
+                  const src = student.grades ? eng.gradeSource(rowForCalc, student.grades, guides, student.track) : null
                   // 판정: 계산된 내 교과등급 우선, 없으면 입력한 내신
                   const basis = myGrade!=null ? myGrade : student.gpa
                   const j = suggestJudgment(basis, a.cut26)
@@ -738,7 +738,7 @@ function ReportTab({ student, teacherName, guides }){
             <tbody>
               {sorted.map(p=>{
                 const rowForCalc = { univ:p.univ, type:p.type, name:p.name, subjects:p.subjects }
-                const myGrade = student.grades ? eng.gradeForRow(rowForCalc, student.grades, guides) : null
+                const myGrade = student.grades ? eng.gradeForRow(rowForCalc, student.grades, guides, student.track) : null
                 return (
                   <tr key={p.id}>
                     <td>
@@ -868,7 +868,7 @@ function GuideCard({ univ, guide, reloadGuides, flash }){
             ) : (
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:8}}>
                 <div className="grow">
-                  <b>{t.trackName||'(전형명 없음)'}</b> <span className="muted">[{t.trackType}]</span>
+                  <b>{t.trackName||'(전형명 없음)'}</b> <span className="muted">[{t.trackType}{t.track?`·${t.track}`:''}]</span>
                   {t.subjectGroups?.length ? ` · 반영: ${t.subjectGroups.join('·')}` : ' · 반영과목 없음(전체평균)'}
                   {t.topN ? ` · 상위${t.topN}과목` : ''}
                   {t.scoreTable ? ' · 배점표✓' : ''}
@@ -889,6 +889,7 @@ function TrackEditor({ track, onSave, onCancel }){
   const [subj, setSubj] = useState((track.subjectGroups||[]).join(','))
   const [topN, setTopN] = useState(track.topN||'')
   const [jinro, setJinro] = useState(track.jinroHandling||'')
+  const [trk, setTrk] = useState(track.track||'')
   const [scoreStr, setScoreStr] = useState(
     track.scoreTable ? Object.entries(track.scoreTable).map(([g,s])=>`${g}:${s}`).join(', ') : ''
   )
@@ -905,6 +906,7 @@ function TrackEditor({ track, onSave, onCancel }){
     }
     onSave({
       subjectGroups,
+      track: trk || null,
       topN: topN==='' ? null : Number(topN),
       jinroHandling: jinro.trim() || null,
       scoreTable,
@@ -913,8 +915,16 @@ function TrackEditor({ track, onSave, onCancel }){
   return (
     <div style={{background:'#fafbfc',border:'1px solid var(--line)',borderRadius:8,padding:10}}>
       <div style={{fontWeight:700,marginBottom:6}}>{track.trackName} <span className="muted">[{track.trackType}]</span></div>
-      <label className="field"><span>반영교과 (쉼표로 구분, 예: 국어,수학,영어,과학)</span>
-        <input className="inp" value={subj} onChange={e=>setSubj(e.target.value)} placeholder="국어,수학,영어,과학" /></label>
+      <div className="row">
+        <label className="field grow"><span>반영교과 (쉼표 구분, 예: 국어,수학,영어,과학)</span>
+          <input className="inp" value={subj} onChange={e=>setSubj(e.target.value)} placeholder="국어,수학,영어,과학" /></label>
+        <label className="field"><span>계열</span>
+          <select className="inp" value={trk} onChange={e=>setTrk(e.target.value)}>
+            <option value="">공통(구분없음)</option>
+            <option value="자연">자연</option>
+            <option value="인문">인문</option>
+          </select></label>
+      </div>
       <div className="row">
         <label className="field grow"><span>상위 N과목 (전과목이면 빈칸)</span>
           <input className="inp" value={topN} onChange={e=>setTopN(e.target.value)} placeholder="예: 10" /></label>
@@ -922,9 +932,9 @@ function TrackEditor({ track, onSave, onCancel }){
           <input className="inp" value={jinro} onChange={e=>setJinro(e.target.value)} placeholder="미반영 또는 A:1등급,B:3등급,C:5등급" /></label>
       </div>
       <label className="field"><span>배점표 (등급:점수, 없으면 빈칸)</span>
-        <input className="inp" value={scoreStr} onChange={e=>setScoreStr(e.target.value)} placeholder="1:100, 2:96, 3:92, 4:86, 5:70, 6:55, 7:40, 8:20, 9:0" /></label>
+        <input className="inp" value={scoreStr} onChange={e=>setScoreStr(e.target.value)} placeholder="1:100, 2:99.5, 3:99, 4:98.5, 5:98, 6:97.5, 7:85, 8:60, 9:30" /></label>
       <div className="muted" style={{fontSize:11,marginBottom:8}}>
-        종합·논술이면 반영교과를 비우세요(전체평균). 배점표는 고려대처럼 등급별 환산점수가 있을 때만.
+        계열: 자연=국수영과, 인문=국수영사가 보통. 학생 계열에 맞는 track이 자동 선택됩니다. 종합·논술이면 반영교과를 비우세요(전체평균).
       </div>
       <div className="row">
         <button className="btn sm primary" onClick={save}>저장</button>
