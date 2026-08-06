@@ -232,22 +232,55 @@ export function parseSubjectGroups(subjects){
 
 // 대학명 퍼지 매칭
 function norm(s){ return String(s||'').replace(/\s/g,'').replace(/(학교|대학교|대학)$/,'') }
-// 파일명 대학명 → 통통통 DB 정식명 매칭 (가천대 → 가천대학교)
+// 흔한 축약 확장 (끝의 '대'도 떼서 비교)
+function expandAlias(n){
+  const base=n.replace(/대$/,'')
+  const map={ '시립':'서울시립', '서울시립':'서울시립', '외':'한국외국어', '한국외':'한국외국어',
+    '항공':'한국항공', '과기원':'과학기술원', '카이스트':'KAIST',
+    '서울교':'서울교육', '경인교':'경인교육', '부산교':'부산교육', '대구교':'대구교육',
+    '광주교':'광주교육', '전주교':'전주교육', '청주교':'청주교육', '춘천교':'춘천교육',
+    '공주교':'공주교육', '진주교':'진주교육' }
+  return map[base] || map[n] || n
+}
+// 파일명 대학명 → 통통통 DB 정식명 매칭. 애매하면 가장 근접한 하나.
 export function matchUnivName(input, dbUnivs){
   if(!input || !dbUnivs || !dbUnivs.length) return null
-  const n=norm(input)
-  const exact=dbUnivs.find(u=>u===input); if(exact) return exact
-  const ne=dbUnivs.find(u=>norm(u)===n); if(ne) return ne
-  const contains=dbUnivs.find(u=>{ const nu=norm(u); return nu.includes(n)||n.includes(nu) }); if(contains) return contains
+  const raw=String(input).trim()
+  // 1) 완전 일치
+  const exact=dbUnivs.find(u=>u===raw); if(exact) return exact
+  const n0=norm(raw)
+  const n=expandAlias(n0)
+  // 2) 정규화 후 완전 일치 (별칭 포함)
+  const ne=dbUnivs.find(u=>{ const nu=norm(u); return nu===n0 || nu===n }); if(ne) return ne
+  // 3) 후보 수집: DB명이 입력으로 시작하거나, 입력이 DB명으로 시작 (접두 일치)
+  const cands=[]
+  for(const u of dbUnivs){
+    const nu=norm(u)
+    if(nu===n || nu.startsWith(n) || n.startsWith(nu)) cands.push({u, nu})
+  }
+  if(cands.length===1) return cands[0].u
+  if(cands.length>1){
+    // 여러 개면 길이 차이가 가장 작은(가장 근접한) 것
+    cands.sort((a,b)=> Math.abs(a.nu.length-n.length) - Math.abs(b.nu.length-n.length))
+    return cands[0].u
+  }
+  // 4) 그래도 없으면 부분 포함 (단, 3글자 이상일 때만 — 짧은 오매칭 방지)
+  if(n.length>=3){
+    const inc=dbUnivs.filter(u=>{ const nu=norm(u); return nu.includes(n) })
+    if(inc.length===1) return inc[0]
+    if(inc.length>1){
+      inc.sort((a,b)=> Math.abs(norm(a).length-n.length) - Math.abs(norm(b).length-n.length))
+      return inc[0]
+    }
+  }
   return null
 }
 export function findGuideForUni(uniGuides, rowUni){
   if(!uniGuides || !rowUni) return null
-  const nRow=norm(rowUni)
   if(uniGuides[rowUni]) return uniGuides[rowUni]
-  for(const [k,v] of Object.entries(uniGuides)){ if(norm(k)===nRow) return v }
-  for(const [k,v] of Object.entries(uniGuides)){ const nk=norm(k); if(nk.includes(nRow)||nRow.includes(nk)) return v }
-  return null
+  const keys=Object.keys(uniGuides)
+  const matched=matchUnivName(rowUni, keys)  // 동일한 정교 매칭 사용
+  return matched ? uniGuides[matched] : null
 }
 function normTrack(s){ return String(s||'').replace(/\s/g,'').replace(/(전형II|전형2|전형Ⅱ|전형)$/,'').toLowerCase() }
 function scoreTrackMatch(g0,r0){
