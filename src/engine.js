@@ -106,15 +106,60 @@ function jinroAchievToGrade(achievement, jinroStr){
   }
   return map[a] ?? null
 }
-// opts: { topN, scoreTable }
-//  topN: 상위 N개 과목만 반영 (등급 좋은 순). scoreTable: {1:100,2:96,...} 등급→배점
+// opts: { topN, scoreTable, weights, rawBands, subjectRawBands, jinroScore }
+//  topN: 상위 N과목 / scoreTable: {등급:점수} 등급배점
+//  weights: {국어:30,수학:40,...} 교과별 반영비율
+//  rawBands: [{min:90,score:1000},...] 원점수 구간배점 (공통)
+//  subjectRawBands: {수학:[...]} 특정교과 별도 원점수배점 (예: 외대 수학)
+//  jinroScore: {A:1000,B:960,C:890} 진로 원점수배점
 export function calcGradeAvg(grades, subjectGroups, jinroHandling, opts={}){
-  const { topN=null, scoreTable=null } = opts
+  const { topN=null, scoreTable=null, weights=null, rawBands=null, subjectRawBands=null, jinroScore=null } = opts
   const groups=subjectGroups||['국어','수학','영어','과학','사회']
   const allGroups=!subjectGroups||subjectGroups.length===0
   const inGroup=g=> allGroups || groups.some(gr=>String(g.group||'').includes(gr))
+  const groupOf=g=>{ for(const k of ['국어','수학','영어','과학','사회','한국사']){ if(String(g.group||'').includes(k)) return k } return String(g.group||'') }
+  const wOf=g=>{ if(!weights) return 1; const k=groupOf(g); return (weights[k]!=null?weights[k]:0) }
 
-  // 반영 대상 과목 모으기 (일반/공통 + 조건부 진로)
+  // 원점수 구간 → 점수
+  const rawToScore=(raw, bands)=>{
+    if(raw==null||!bands||!bands.length) return null
+    const sorted=[...bands].sort((a,b)=>b.min-a.min)
+    for(const b of sorted){ if(raw>=b.min) return b.score }
+    return sorted[sorted.length-1]?.score ?? null
+  }
+  const hasRaw = (rawBands&&rawBands.length) || (subjectRawBands&&Object.keys(subjectRawBands).length)
+
+  // ===== 원점수 배점 모드 (외대식) =====
+  if(hasRaw){
+    let sW=0, sScore=0
+    const allBandScores=[]
+    for(const g of (grades||[])){
+      if(g.courseType==='체육예술') continue
+      if(!inGroup(g)) continue
+      const grp=groupOf(g)
+      if(g.courseType==='진로'){
+        if(!jinroScore) continue
+        const sc=jinroScore[(g.achievement||'').toUpperCase()]; if(sc==null) continue
+        const w=(wOf(g))*(Number(g.unit)||1); if(w<=0) continue
+        sScore+=sc*w; sW+=w; allBandScores.push(sc)
+      }else{
+        const bands = (subjectRawBands&&subjectRawBands[grp]) || rawBands
+        const sc=rawToScore(g.rawScore, bands); if(sc==null) continue
+        const w=(wOf(g))*(Number(g.unit)||1); if(w<=0) continue
+        sScore+=sc*w; sW+=w; allBandScores.push(sc)
+      }
+    }
+    if(sW>0){
+      const avg=sScore/sW
+      // 원점수 배점표를 등급 역환산용으로 구성 (score 큰 게 1등급)
+      const refBands = rawBands || Object.values(subjectRawBands)[0]
+      const st={}; refBands.forEach((b,i)=>{ st[i+1]=b.score })
+      return scoreToGrade(avg, st)
+    }
+    return null
+  }
+
+  // ===== 등급 기반 모드 =====
   const items=[]
   for(const g of (grades||[])){
     if(g.courseType==='체육예술') continue
@@ -122,40 +167,37 @@ export function calcGradeAvg(grades, subjectGroups, jinroHandling, opts={}){
     if(g.grade==null) continue
     const n=Number(g.grade); if(!Number.isFinite(n)||n<1||n>9) continue
     if(!inGroup(g)) continue
-    items.push({ grade:n, unit:Number(g.unit)||1 })
+    items.push({ grade:n, unit:Number(g.unit)||1, w:wOf(g) })
   }
   if(jinroHandling && jinroHandling!=='미반영'){
     for(const g of (grades||[])){
       if(g.courseType!=='진로' || !inGroup(g)) continue
       const cv=jinroAchievToGrade(g.achievement,jinroHandling)
-      if(cv!=null) items.push({ grade:cv, unit:Number(g.unit)||1 })
+      if(cv!=null) items.push({ grade:cv, unit:Number(g.unit)||1, w:wOf(g) })
     }
   }
   if(!items.length) return null
 
-  // 상위 N개만: 등급 좋은(작은) 순 정렬 후 앞 N개
   let use=items
   if(topN && topN>0 && items.length>topN){
     use=[...items].sort((a,b)=>a.grade-b.grade).slice(0,topN)
   }
 
-  // 배점표가 있으면 점수로 환산 → 가중평균 점수 → 등급 스케일로 역환산
+  // 배점표(등급→점수) 모드
   if(scoreTable && Object.keys(scoreTable).length){
     let sW=0,sScore=0
     for(const it of use){
       const sc = scoreTable[it.grade] ?? scoreTable[Math.round(it.grade)] ?? null
       if(sc==null) continue
-      sScore+=sc*it.unit; sW+=it.unit
+      const w=it.unit*(weights?it.w:1)
+      sScore+=sc*w; sW+=w
     }
-    if(sW>0){
-      const avgScore=sScore/sW
-      return scoreToGrade(avgScore, scoreTable) // 등급으로 역환산해 통통통 컷과 비교 가능
-    }
+    if(sW>0) return scoreToGrade(sScore/sW, scoreTable)
   }
 
-  // 기본: 등급 가중평균
+  // 등급 가중평균 (가중치 있으면 반영)
   let sumW=0,sumG=0
-  for(const it of use){ sumG+=it.grade*it.unit; sumW+=it.unit }
+  for(const it of use){ const w=it.unit*(weights?it.w:1); sumG+=it.grade*w; sumW+=w }
   return sumW>0 ? sumG/sumW : null
 }
 // 배점 점수 → 가장 가까운 등급으로 역환산 (배점표 구간 보간)
@@ -305,7 +347,14 @@ export function gradeForRow(row, grades, uniGuides, studentTrack){
           grades,
           useTrack.subjectGroups?.length?useTrack.subjectGroups:null,
           useTrack.jinroHandling||null,
-          { topN:useTrack.topN||null, scoreTable:useTrack.scoreTable||null }
+          {
+            topN:useTrack.topN||null,
+            scoreTable:useTrack.scoreTable||null,
+            weights:useTrack.weights||null,
+            rawBands:useTrack.rawBands||null,
+            subjectRawBands:useTrack.subjectRawBands||null,
+            jinroScore:useTrack.jinroScore||null,
+          }
         )
       }
     }
