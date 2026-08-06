@@ -232,14 +232,14 @@ function findGuideTrack(guide, row){
 
 // track 선택: "그 모집단위(행)의 계열"을 최우선으로.
 // 인문 학과 → 인문 track, 자연 학과 → 자연 track.
-// 학생 계열은 모집단위 계열 정보가 전혀 없을 때만 보조로 사용.
+// 계열이 맞는 track이 없으면 null 반환 → 통통통 반영과목(DB근사)으로 빠짐.
 function pickTrackForRow(guide, row, studentTrack){
   const tracks=(guide.tracks||[]).filter(t=>t.subjectGroups?.length)
   if(!tracks.length) return null
 
-  const hasNatTrack = tracks.some(t=>t.track==='자연')
-  const hasHumTrack = tracks.some(t=>t.track==='인문')
-  const splitByField = hasNatTrack && hasHumTrack  // 이 대학이 계열 구분을 두는가
+  const natTrack = tracks.find(t=>t.track==='자연')
+  const humTrack = tracks.find(t=>t.track==='인문')
+  const commonTrack = tracks.find(t=>!t.track||t.track==='공통')
 
   // 이 모집단위의 계열 판정 (행 계열 우선, 없으면 학생 계열)
   const rowField = String(row.track||'')
@@ -248,25 +248,26 @@ function pickTrackForRow(guide, row, studentTrack){
   const stuField = String(studentTrack||'')
   const stuNat = /자연|이과/.test(stuField)
   const stuHum = /인문|문과/.test(stuField)
+  const wantNat = rowNat || (!rowHum && stuNat)
+  const wantHum = rowHum || (!rowNat && stuHum)
 
-  // 대학이 계열을 구분하는 경우: 반드시 그 모집단위 계열에 맞춰 고른다
-  if(splitByField){
-    if(rowNat) return tracks.find(t=>t.track==='자연')
-    if(rowHum) return tracks.find(t=>t.track==='인문')
-    // 행 계열 정보가 없으면 학생 계열로 보조 판단
-    if(stuNat) return tracks.find(t=>t.track==='자연')
-    if(stuHum) return tracks.find(t=>t.track==='인문')
-    // 그래도 모르면 전형명 매칭 시도, 최후엔 자연(대개 기본)
-    const gt=findGuideTrack(guide,row)
-    return (gt&&gt.subjectGroups?.length) ? gt : tracks[0]
+  // 이 모집단위가 인문 → 인문 track. 없으면 공통. 그것도 없으면 null(DB근사)
+  if(wantHum){
+    if(humTrack) return humTrack
+    if(commonTrack) return commonTrack
+    return null // 인문학과인데 인문/공통 track이 없음 → 자연으로 잘못 계산 방지
   }
-
-  // 계열 구분이 없는 대학: 전형명 매칭 → 공통 → 첫 track
+  // 이 모집단위가 자연 → 자연 track. 없으면 공통. 그것도 없으면 null
+  if(wantNat){
+    if(natTrack) return natTrack
+    if(commonTrack) return commonTrack
+    return null
+  }
+  // 계열 판단 불가: 공통 → 전형명 매칭 → 유일 track
+  if(commonTrack) return commonTrack
   const gt=findGuideTrack(guide,row)
   if(gt && gt.subjectGroups?.length) return gt
-  const common=tracks.find(t=>!t.track||t.track==='공통')
-  if(common) return common
-  return tracks[0]
+  return tracks.length===1 ? tracks[0] : null
 }
 
 // 한 지원행(대학·전형)에 대해 학생 교과등급 계산
