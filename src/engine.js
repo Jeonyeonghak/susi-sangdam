@@ -113,7 +113,7 @@ function jinroAchievToGrade(achievement, jinroStr){
 //  subjectRawBands: {수학:[...]} 특정교과 별도 원점수배점 (예: 외대 수학)
 //  jinroScore: {A:1000,B:960,C:890} 진로 원점수배점
 export function calcGradeAvg(grades, subjectGroups, jinroHandling, opts={}){
-  const { topN=null, scoreTable=null, weights=null, rawBands=null, subjectRawBands=null, jinroScore=null } = opts
+  const { topN=null, scoreTable=null, weights=null, rawBands=null, subjectRawBands=null, jinroScore=null, returnScore=false } = opts
   const groups=subjectGroups||['국어','수학','영어','과학','사회']
   const allGroups=!subjectGroups||subjectGroups.length===0
   const inGroup=g=> allGroups || groups.some(gr=>String(g.group||'').includes(gr))
@@ -151,7 +151,8 @@ export function calcGradeAvg(grades, subjectGroups, jinroHandling, opts={}){
     }
     if(sW>0){
       const avg=sScore/sW
-      // 원점수 배점표를 등급 역환산용으로 구성 (score 큰 게 1등급)
+      if(returnScore) return { value: avg, isScore: true }
+      // (하위호환) 등급 역환산
       const refBands = rawBands || Object.values(subjectRawBands)[0]
       const st={}; refBands.forEach((b,i)=>{ st[i+1]=b.score })
       return scoreToGrade(avg, st)
@@ -192,13 +193,19 @@ export function calcGradeAvg(grades, subjectGroups, jinroHandling, opts={}){
       const w=it.unit*(weights?it.w:1)
       sScore+=sc*w; sW+=w
     }
-    if(sW>0) return scoreToGrade(sScore/sW, scoreTable)
+    if(sW>0){
+      const avg=sScore/sW
+      if(returnScore) return { value: avg, isScore: true }
+      return scoreToGrade(avg, scoreTable)
+    }
   }
 
   // 등급 가중평균 (가중치 있으면 반영)
   let sumW=0,sumG=0
   for(const it of use){ const w=it.unit*(weights?it.w:1); sumG+=it.grade*w; sumW+=w }
-  return sumW>0 ? sumG/sumW : null
+  if(sumW<=0) return null
+  const gradeAvg=sumG/sumW
+  return returnScore ? { value: gradeAvg, isScore: false } : gradeAvg
 }
 // 배점 점수 → 가장 가까운 등급으로 역환산 (배점표 구간 보간)
 function scoreToGrade(score, scoreTable){
@@ -366,17 +373,21 @@ function pickTrackForRow(guide, row, studentTrack){
   return tracks.length===1 ? tracks[0] : null
 }
 
-// 한 지원행(대학·전형)에 대해 학생 교과등급 계산
+// 한 지원행 계산. 반환: { value, isScore }  (isScore=true면 환산점수, false면 등급)
 export function gradeForRow(row, grades, uniGuides, studentTrack){
   if(!grades || !grades.length) return null
   const tt=row.type||''
-  if(tt.includes('종합') || tt.includes('논술')) return calcOverallAvg(grades)
+  if(tt.includes('종합') || tt.includes('논술')){
+    const v=calcOverallAvg(grades); return v==null?null:{ value:v, isScore:false }
+  }
   if(tt.includes('교과')){
     const guide=findGuideForUni(uniGuides, row.univ)
     if(guide){
       const useTrack = pickTrackForRow(guide, row, studentTrack)
       if(useTrack){
-        return calcGradeAvg(
+        // 배점표 또는 원점수배점이 있으면 환산점수 모드
+        const isScoreMode = !!(useTrack.scoreTable || useTrack.rawBands || useTrack.subjectRawBands)
+        const r = calcGradeAvg(
           grades,
           useTrack.subjectGroups?.length?useTrack.subjectGroups:null,
           useTrack.jinroHandling||null,
@@ -387,14 +398,20 @@ export function gradeForRow(row, grades, uniGuides, studentTrack){
             rawBands:useTrack.rawBands||null,
             subjectRawBands:useTrack.subjectRawBands||null,
             jinroScore:useTrack.jinroScore||null,
+            returnScore:true,
           }
         )
+        if(r==null) return null
+        // r은 {value,isScore} (returnScore=true라서)
+        return typeof r==='object' ? r : { value:r, isScore:isScoreMode }
       }
     }
     const groups=parseSubjectGroups(row.subjects)
-    return calcGradeAvg(grades, groups, null)
+    const v=calcGradeAvg(grades, groups, null)
+    return v==null?null:{ value:v, isScore:false }
   }
-  return calcOverallAvg(grades)
+  const v=calcOverallAvg(grades)
+  return v==null?null:{ value:v, isScore:false }
 }
 // 계산 근거 라벨
 export function gradeSource(row, grades, uniGuides, studentTrack){
