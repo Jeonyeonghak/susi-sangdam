@@ -7,10 +7,20 @@ const JUDGMENTS = ['안정','적정','도전','상향']
 const STATUSES  = ['관심','지원확정','보류','제외']
 const fmt = v => (v===null||v===undefined||v==='') ? '–' : v
 
-// 학생 등급 대비 컷 등급으로 안정/적정/도전/상향 자동 제안
-function suggestJudgment(gpa, cut){
-  if(gpa==null || cut==null) return null
-  const d = cut - gpa // (+)면 컷이 학생보다 낮은 성적 = 여유
+// 등급: 낮을수록 좋음. 점수: 높을수록 좋음.
+function suggestJudgment(myVal, cut, isScore){
+  if(myVal==null || cut==null) return null
+  const cutNum = Number(cut); if(!Number.isFinite(cutNum)) return null
+  if(isScore){
+    const d = myVal - cutNum
+    const ref = Math.max(Math.abs(cutNum),1)
+    const pct = d/ref*100
+    if(pct >= 3) return '안정'
+    if(pct >= -1) return '적정'
+    if(pct >= -4) return '도전'
+    return '상향'
+  }
+  const d = cutNum - myVal
   if(d >= 0.4) return '안정'
   if(d >= -0.1) return '적정'
   if(d >= -0.5) return '도전'
@@ -538,14 +548,19 @@ function SearchTab({ student, guides, flash }){
   }, [q.univ, q.dept, q.region, q.type, q.track, onlyReachable, hasFilter, student.gpa])
 
   const pickedIds = useMemo(()=> new Set(picks.map(p=>p.admission_id)), [picks])
-  const add = async (adm, myGrade)=>{
+  const add = async (adm, res)=>{
     if(pickedIds.has(adm.id)){ flash('이미 담긴 학과입니다'); return }
     const p = await db.addPick(student.id, adm)
-    const basis = myGrade!=null ? myGrade : student.gpa
-    const sug = suggestJudgment(basis, adm.cut26)
+    const isScore = res?.isScore
+    const myVal = res?.value ?? null
+    const cutForCmp = isScore ? adm.cutscore26 : adm.cut26
+    const basis = myVal!=null ? myVal : (isScore?null:student.gpa)
+    const sug = suggestJudgment(basis, cutForCmp, isScore)
     const patch = {}
     if(sug) patch.judgment = sug
-    if(myGrade!=null) patch.reason = `내 교과 ${myGrade.toFixed(2)} · 26컷 ${adm.cut26 ?? '–'}`
+    if(myVal!=null) patch.reason = isScore
+      ? `내 환산 ${myVal.toFixed(2)} · 환산컷 ${adm.cutscore26 ?? '–'}`
+      : `내 교과 ${myVal.toFixed(2)} · 26컷 ${adm.cut26 ?? '–'}`
     if(Object.keys(patch).length){ await db.updatePick(p.id, patch); Object.assign(p, patch) }
     setPicks(await db.listPicks(student.id)); flash(`${adm.univ} ${adm.dept} 담김`)
   }
@@ -604,7 +619,7 @@ function SearchTab({ student, guides, flash }){
             <table>
               <thead><tr>
                 <th></th><th>대학</th><th>계열</th><th>모집단위</th><th>전형유형</th><th>전형명</th>
-                <th className="num">인원</th><th className="num">내 교과</th><th className="num">26컷</th><th className="num">25컷</th>
+                <th className="num">인원</th><th className="num">내 성적</th><th className="num">26컷</th><th className="num">25컷</th>
                 <th className="num">26경쟁</th><th>판정</th><th>최저</th><th>고사일</th><th>유의</th>
               </tr></thead>
               <tbody>
@@ -615,16 +630,19 @@ function SearchTab({ student, guides, flash }){
                   <tr><td colSpan={15} className="empty">조건에 맞는 입결이 없습니다. 필터를 넓혀 보세요.</td></tr>
                 )}
                 {rows.map(a=>{
-                  // 학생 성적이 있으면 이 대학·전형 방식으로 교과등급 계산
                   const rowForCalc = { univ:a.univ, type:a.type, name:a.name, subjects:a.subjects, track:a.track, dept:a.dept }
-                  const myGrade = student.grades ? eng.gradeForRow(rowForCalc, student.grades, guides, student.track) : null
+                  const res = student.grades ? eng.gradeForRow(rowForCalc, student.grades, guides, student.track) : null
                   const src = student.grades ? eng.gradeSource(rowForCalc, student.grades, guides, student.track) : null
-                  // 판정: 계산된 내 교과등급 우선, 없으면 입력한 내신
-                  const basis = myGrade!=null ? myGrade : student.gpa
-                  const j = suggestJudgment(basis, a.cut26)
+                  const isScore = res?.isScore
+                  const myVal = res?.value ?? null
+                  // 점수면 환산컷(cutscore26), 등급이면 등급컷(cut26)과 비교
+                  const cut26disp = isScore ? a.cutscore26 : a.cut26
+                  const cut25disp = isScore ? a.cutscore25 : a.cut25
+                  const basis = myVal!=null ? myVal : (isScore?null:student.gpa)
+                  const j = suggestJudgment(basis, cut26disp, isScore)
                   return (
                     <tr key={a.id}>
-                      <td><button className="btn sm" disabled={pickedIds.has(a.id)} onClick={()=>add(a, myGrade)}>
+                      <td><button className="btn sm" disabled={pickedIds.has(a.id)} onClick={()=>add(a, res)}>
                         {pickedIds.has(a.id)?'담김':'담기'}</button></td>
                       <td><b>{a.univ}</b></td>
                       <td>{a.track}</td>
@@ -633,11 +651,11 @@ function SearchTab({ student, guides, flash }){
                       <td>{a.name}</td>
                       <td className="num">{fmt(a.quota)}</td>
                       <td className="num" title={src||''}>
-                        {myGrade!=null ? myGrade.toFixed(2) : '–'}
-                        {src && <div style={{fontSize:10,color:'var(--sub)',fontWeight:400}}>{src}</div>}
+                        {myVal!=null ? (isScore?myVal.toFixed(2):myVal.toFixed(2)) : '–'}
+                        {src && <div style={{fontSize:10,color:'var(--sub)',fontWeight:400}}>{isScore?'점수·':''}{src}</div>}
                       </td>
-                      <td className="num">{fmt(a.cut26)}</td>
-                      <td className="num">{fmt(a.cut25)}</td>
+                      <td className="num">{fmt(cut26disp)}</td>
+                      <td className="num">{fmt(cut25disp)}</td>
                       <td className="num">{fmt(a.comp26)}</td>
                       <td>{j && <span className={`j-badge j-${j}`}>{j}</span>}</td>
                       <td className="wrap">{fmt(a.minreq)}</td>
@@ -767,7 +785,9 @@ function ReportTab({ student, teacherName, guides }){
             <tbody>
               {sorted.map(p=>{
                 const rowForCalc = { univ:p.univ, type:p.type, name:p.name, subjects:p.subjects, track:p.track, dept:p.dept }
-                const myGrade = student.grades ? eng.gradeForRow(rowForCalc, student.grades, guides, student.track) : null
+                const res = student.grades ? eng.gradeForRow(rowForCalc, student.grades, guides, student.track) : null
+                const myVal = res?.value ?? null
+                const isScore = res?.isScore
                 return (
                   <tr key={p.id}>
                     <td>
@@ -781,10 +801,10 @@ function ReportTab({ student, teacherName, guides }){
                     <td>{p.type}</td>
                     <td>{p.name}</td>
                     <td className="num">{fmt(p.quota)}</td>
-                    <td className="num"><b>{myGrade!=null ? myGrade.toFixed(2) : '–'}</b></td>
-                    <td className="num">{fmt(p.cut26)}</td>
+                    <td className="num"><b>{myVal!=null ? myVal.toFixed(2) : '–'}</b></td>
+                    <td className="num">{fmt(isScore ? p.cutscore26 : p.cut26)}</td>
                     <td className="num">{fmt(p.comp26)}</td>
-                    <td className="num">{fmt(p.cut25)}</td>
+                    <td className="num">{fmt(isScore ? p.cutscore25 : p.cut25)}</td>
                     <td className="num">{fmt(p.comp25)}</td>
                     <td>{fmt(p.minreq)}</td>
                     <td>{fmt(p.examdate)}</td>
