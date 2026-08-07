@@ -385,25 +385,28 @@ export function gradeForRow(row, grades, uniGuides, studentTrack){
     if(guide){
       const useTrack = pickTrackForRow(guide, row, studentTrack)
       if(useTrack){
-        // 배점표 또는 원점수배점이 있으면 환산점수 모드
-        const isScoreMode = !!(useTrack.scoreTable || useTrack.rawBands || useTrack.subjectRawBands)
+        // 배점표/원점수배점이 있으면 환산점수 모드 — 단, 통통통에 환산컷이 있을 때만
+        const hasScoreTable = !!(useTrack.scoreTable || useTrack.rawBands || useTrack.subjectRawBands)
+        const hasCutscore = row.cutscore26!=null && row.cutscore26!=='' // 통통통 환산컷 존재?
+        const useScoreMode = hasScoreTable && hasCutscore
         const r = calcGradeAvg(
           grades,
           useTrack.subjectGroups?.length?useTrack.subjectGroups:null,
           useTrack.jinroHandling||null,
           {
             topN:useTrack.topN||null,
-            scoreTable:useTrack.scoreTable||null,
+            scoreTable: useScoreMode ? (useTrack.scoreTable||null) : null,
             weights:useTrack.weights||null,
-            rawBands:useTrack.rawBands||null,
-            subjectRawBands:useTrack.subjectRawBands||null,
-            jinroScore:useTrack.jinroScore||null,
-            returnScore:true,
+            rawBands: useScoreMode ? (useTrack.rawBands||null) : null,
+            subjectRawBands: useScoreMode ? (useTrack.subjectRawBands||null) : null,
+            jinroScore: useScoreMode ? (useTrack.jinroScore||null) : null,
+            returnScore: useScoreMode,
           }
         )
         if(r==null) return null
-        // r은 {value,isScore} (returnScore=true라서)
-        return typeof r==='object' ? r : { value:r, isScore:isScoreMode }
+        // useScoreMode면 {value,isScore:true}, 아니면 등급 숫자
+        if(typeof r==='object') return r
+        return { value:r, isScore:false }
       }
     }
     const groups=parseSubjectGroups(row.subjects)
@@ -446,7 +449,7 @@ Return ONLY this JSON shape:
 - trackName에 계열을 포함 (예: "일반전형-인문계열", "일반전형-자연계열").
 - 같은 전형이라도 계열마다 배점표(scoreTable)가 다르면 각각 정확히 읽을 것.
 - subjectGroups: 실제 반영교과명만. 인문은 보통 국어·수학·영어·사회, 자연은 국어·수학·영어·과학.
-- topN: "우수한 10개 과목", "상위 10과목"이면 그 숫자. 전과목이면 null.
+- topN: 반드시 "상위 N개 과목만 반영", "우수한 10개 과목", "상위 10과목" 처럼 '상위/우수한 N개만 골라 반영한다'고 명시된 경우에만 그 숫자. "반영교과의 전 과목", "이수한 전 과목", 아무 언급 없음이면 반드시 null. 확실하지 않으면 null. 절대 임의로 10 같은 숫자를 넣지 말 것.
 - scoreTable: "변환등급 배점" 또는 "등급별 반영점수" 표가 있으면 {등급:점수}로 정확히. 계열마다 다르면 각 track에 각각.
 - jinroHandling: "진로선택과목 반영하지 않음"이면 "미반영". 환산하면 "A:1등급,B:3등급,C:5등급".
 - 종합전형은 subjectGroups=[], scoreTable=null, track 지정 안 함.
