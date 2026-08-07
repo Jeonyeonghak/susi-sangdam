@@ -630,7 +630,7 @@ function SearchTab({ student, guides, flash }){
                   <tr><td colSpan={15} className="empty">조건에 맞는 입결이 없습니다. 필터를 넓혀 보세요.</td></tr>
                 )}
                 {rows.map(a=>{
-                  const rowForCalc = { univ:a.univ, type:a.type, name:a.name, subjects:a.subjects, track:a.track, dept:a.dept }
+                  const rowForCalc = { univ:a.univ, type:a.type, name:a.name, subjects:a.subjects, track:a.track, dept:a.dept, cutscore26:a.cutscore26 }
                   const res = student.grades ? eng.gradeForRow(rowForCalc, student.grades, guides, student.track) : null
                   const src = student.grades ? eng.gradeSource(rowForCalc, student.grades, guides, student.track) : null
                   const isScore = res?.isScore
@@ -784,7 +784,7 @@ function ReportTab({ student, teacherName, guides }){
             </tr></thead>
             <tbody>
               {sorted.map(p=>{
-                const rowForCalc = { univ:p.univ, type:p.type, name:p.name, subjects:p.subjects, track:p.track, dept:p.dept }
+                const rowForCalc = { univ:p.univ, type:p.type, name:p.name, subjects:p.subjects, track:p.track, dept:p.dept, cutscore26:p.cutscore26 }
                 const res = student.grades ? eng.gradeForRow(rowForCalc, student.grades, guides, student.track) : null
                 const myVal = res?.value ?? null
                 const isScore = res?.isScore
